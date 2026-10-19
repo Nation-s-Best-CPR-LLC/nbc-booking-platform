@@ -76,9 +76,10 @@ second, wrong source of truth.
 
 | Data | Engine stores | Why |
 |---|---|---|
-| User object ID, tenant ID, email, display name | **Reference + mirror**: `staff_users` | Bind sign-ins to a console account. |
-| Who may sign in | **Not stored** | Entra's "assignment required" decides. |
-| What a person may do (CS, manager, ops) | **Owned**: `staff_users.roles` | The plan: "inside the console, mark who is a manager". |
+| User object ID, tenant ID | **Reference**: `user_identities` (provider `microsoft`) | Bind sign-ins to an account. |
+| Email, display name | **Mirror**: `user_accounts` | Shown in menus and the action log. |
+| Who may sign in at all | **Not stored** | Entra's "assignment required" decides. |
+| What a person may do (roles, permissions, dashboards) | **Owned**: `roles`, `permissions`, `role_permissions`, `user_roles` | The plan: "inside the console, mark who is a manager". Instructors (emailed sign-in links) use the same tables. |
 | Passwords, MFA | **Never** | |
 
 ### GA4, Meta (pixel + Conversions API), Google Ads — own analytics and ad data
@@ -125,6 +126,7 @@ nothing here is stored for it.
 - Seat inventory: holds, capacity, overrides and their reasons
 - Registrations and their full lifecycle, transfers, cancellations and forfeits
 - Waitlist entries, offers and their timing
+- Accounts, roles, permissions and which dashboard each role opens
 - Instructor eligibility, requests, awards, assignments, attendance marks and pay records (from the portal launch)
 - CS notes, the audit log, consent evidence, accepted terms versions
 - Public page copy approved by Bre (`page_content`) and URL redirects

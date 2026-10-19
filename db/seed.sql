@@ -37,4 +37,113 @@ INSERT INTO app_settings (key, value, description) VALUES
   ('airtable_writeback_enabled',     'false', 'Only production writes back to the NBC Master Base (there is one base; staging must not write to it).'),
   ('customer_service_contact',       '{"email":"info@nationsbestcpr.com"}', 'Shown in the "Offer expired" message (waitlist rules §10, recommended).');
 
+-- -----------------------------------------------------------------------------
+-- Roles (one dashboard each) and permissions
+-- -----------------------------------------------------------------------------
+INSERT INTO roles (code, name, description, dashboard_key, sign_in_method, grants_all, is_scopable, sort_order) VALUES
+  ('admin',             'Admin',                     'Everything, including people, roles, settings and billing items.',                 'admin',             'microsoft',  true,  false, 10),
+  ('manager',           'Manager',                   'Customer service plus large refunds, extra seats over the limit and the audit log.', 'manager',           'microsoft',  false, true,  20),
+  ('customer_service',  'Customer service',          'Find classes and students; book by phone or invoice; transfer, cancel, refund within policy.', 'customer_service', 'microsoft', false, true, 30),
+  ('operations',        'Operations',                'Teaching side: post classes to instructors, approve who teaches, add helpers, coverage.',     'operations',       'microsoft', false, true, 40),
+  ('helper_recruiting', 'Helper instructor recruiting', 'Gets alerts when a waiting list justifies a helper instructor; sees demand and coverage.', 'helper_recruiting', 'microsoft', false, true, 50),
+  ('location_approver', 'Second-class approver',     'Gets alerts when a small room has enough people waiting for a second class.',      'location_approver', 'microsoft',  false, true,  60),
+  ('viewer',            'Viewer',                    'Read-only overview: classes, waiting lists, coverage and reports.',                'viewer',            'microsoft',  false, true,  70),
+  ('instructor',        'Instructor',                'Own classes only: requests, schedule, class lists, attendance, availability, pay. Same role whether lead or helper in a class.', 'instructor', 'email_link', false, false, 80);
+
+INSERT INTO permissions (code, area, description, own_records_only) VALUES
+  -- Classes
+  ('class.view',               'Classes',     'See every class, live seat numbers and class lists', false),
+  ('class.packet_view',        'Classes',     'See private class details (access code, on-site contact)', false),
+  ('class.roster_export',      'Classes',     'Export a class list for the Red Cross', false),
+  ('class.capacity_override',  'Classes',     'Add seats beyond a class''s limit (with a reason)', false),
+  ('class.sync_now',           'Classes',     'Pull a class from the planning spreadsheet right now', false),
+  -- Students and bookings
+  ('student.view',             'Students',    'Find students; see their bookings, payments, transfers, notes and messages', false),
+  ('student.edit',             'Students',    'Fix a student''s name, email or phone; resend the confirmation', false),
+  ('student.note',             'Students',    'Add notes', false),
+  ('booking.create_phone',     'Bookings',    'Book a caller by sending a payment link', false),
+  ('booking.create_invoice',   'Bookings',    'Book a company on an invoice or purchase order', false),
+  ('booking.transfer',         'Bookings',    'Move a student to another class', false),
+  ('booking.transfer_bulk',    'Bookings',    'Move all students of a cancelled class, or send pick-a-date links', false),
+  ('booking.cancel',           'Bookings',    'Cancel a booking', false),
+  ('booking.attendance',       'Bookings',    'Check students in and mark Complete / No Show on any class', false),
+  -- Money
+  ('payment.view',             'Money',       'See payments and refunds', false),
+  ('refund.issue',             'Money',       'Refund within the written policy, below the large-refund threshold', false),
+  ('refund.approve_large',     'Money',       'Approve refunds above the large-refund threshold', false),
+  -- Waiting lists
+  ('waitlist.view',            'Waiting lists', 'See waiting lists and offers', false),
+  ('waitlist.manage',          'Waiting lists', 'Remove people; re-offer a seat after "Offer expired"', false),
+  -- Teaching (office side)
+  ('instructor.view',          'Teaching',    'See instructor profiles, certifications and availability', false),
+  ('instructor.manage',        'Teaching',    'Add instructors, verify certifications and equipment, invite to the portal', false),
+  ('teaching.coverage_view',   'Teaching',    'See classes that still need an instructor', false),
+  ('teaching.post_offer',      'Teaching',    'Post classes for instructors to request', false),
+  ('teaching.award',           'Teaching',    'Approve who teaches a class', false),
+  ('teaching.helper_assign',   'Teaching',    'Add or remove a helper instructor', false),
+  ('pay.view_all',             'Teaching',    'See every instructor pay record', false),
+  ('pay.approve',              'Teaching',    'Approve pay records for export to bookkeeping', false),
+  -- Alerts (who receives them)
+  ('alert.coverage',           'Alerts',      'Receive 21 / 14 / 7-day "no instructor yet" alerts', false),
+  ('alert.helper_demand',      'Alerts',      'Receive "waiting list justifies a helper instructor" alerts', false),
+  ('alert.second_session',     'Alerts',      'Receive "enough waiting for a second class" alerts', false),
+  -- Instructor's own records
+  ('own.classes_view',         'My teaching', 'My classes: live seats, waiting count, class list and private details', true),
+  ('own.attendance',           'My teaching', 'Check in and mark my students Complete / No Show', true),
+  ('own.roster_export',        'My teaching', 'Export my class list for the Red Cross', true),
+  ('own.offers_request',       'My teaching', 'See open classes I qualify for and request them', true),
+  ('own.class_release',        'My teaching', 'Release a class up to 7 days before it', true),
+  ('own.availability_manage',  'My teaching', 'Set my availability and time off', true),
+  ('own.certs_view',           'My teaching', 'See my certifications and expiry dates', true),
+  ('own.pay_view',             'My teaching', 'See my pay records', true),
+  -- Administration
+  ('user.manage',              'Admin',       'Invite people; grant and revoke roles', false),
+  ('settings.manage',          'Admin',       'Change business settings (hold minutes, alert days, ...)', false),
+  ('content.edit',             'Admin',       'Edit public page wording', false),
+  ('content.approve',          'Admin',       'Approve public page wording', false),
+  ('system.health_view',       'Admin',       'See sync status, the unsynced list and data problems', false),
+  ('system.issue_resolve',     'Admin',       'Mark data problems resolved', false),
+  ('audit.view',               'Admin',       'See the full action log', false),
+  ('report.view',              'Admin',       'See reports and numbers', false);
+
+-- customer_service
+INSERT INTO role_permissions (role_code, permission_code)
+SELECT 'customer_service', unnest(ARRAY[
+  'class.view', 'student.view', 'student.edit', 'student.note',
+  'booking.create_phone', 'booking.create_invoice', 'booking.transfer', 'booking.transfer_bulk', 'booking.cancel',
+  'payment.view', 'refund.issue', 'waitlist.view', 'waitlist.manage', 'system.health_view']);
+
+-- manager = customer service + the manager-only decisions
+INSERT INTO role_permissions (role_code, permission_code)
+SELECT 'manager', permission_code FROM role_permissions WHERE role_code = 'customer_service'
+UNION
+SELECT 'manager', unnest(ARRAY[
+  'refund.approve_large', 'class.capacity_override', 'class.packet_view', 'booking.attendance',
+  'teaching.coverage_view', 'audit.view', 'report.view', 'system.issue_resolve', 'content.approve']);
+
+-- operations
+INSERT INTO role_permissions (role_code, permission_code)
+SELECT 'operations', unnest(ARRAY[
+  'class.view', 'class.packet_view', 'class.roster_export', 'class.sync_now', 'booking.attendance',
+  'waitlist.view', 'instructor.view', 'instructor.manage',
+  'teaching.coverage_view', 'teaching.post_offer', 'teaching.award', 'teaching.helper_assign',
+  'pay.view_all', 'alert.coverage', 'system.health_view', 'system.issue_resolve', 'content.edit']);
+
+-- helper_recruiting
+INSERT INTO role_permissions (role_code, permission_code)
+SELECT 'helper_recruiting', unnest(ARRAY[
+  'class.view', 'waitlist.view', 'instructor.view', 'teaching.coverage_view', 'alert.helper_demand']);
+
+-- location_approver
+INSERT INTO role_permissions (role_code, permission_code)
+SELECT 'location_approver', unnest(ARRAY['class.view', 'waitlist.view', 'alert.second_session']);
+
+-- viewer
+INSERT INTO role_permissions (role_code, permission_code)
+SELECT 'viewer', unnest(ARRAY['class.view', 'waitlist.view', 'teaching.coverage_view', 'report.view', 'system.health_view']);
+
+-- instructor (lead or helper: same permissions; limited to their own classes)
+INSERT INTO role_permissions (role_code, permission_code)
+SELECT 'instructor', code FROM permissions WHERE code LIKE 'own.%';
+
 COMMIT;

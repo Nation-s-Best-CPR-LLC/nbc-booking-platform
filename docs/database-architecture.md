@@ -12,11 +12,12 @@ comments are updated in the same pull request.
 
 ## Table map
 
-54 tables and 5 views, in 14 groups:
+59 tables and 6 views, in 14 groups:
 
 | Group | Tables | Owner |
 |---|---|---|
-| Staff and settings | `staff_users`, `app_settings`, `policy_versions` | Engine (identity from Entra) |
+| Accounts, roles, permissions | `user_accounts`, `user_identities`, `roles`, `permissions`, `role_permissions`, `user_roles` | Engine (staff sign-in identity from Entra) |
+| Settings and policies | `app_settings`, `policy_versions` | Engine |
 | Catalog | `airtable_records`, `metros`, `sites`, `site_private_details`, `rooms`, `room_course_families`, `course_families`, `products` | Mirror of Airtable |
 | Classes and seats | `sessions`, `session_airtable_records`, `session_private_details`, `session_products`, `external_seat_reservations`, `seat_overrides` | Airtable schedule, engine capacity |
 | People | `people` | Mirror of GHL contacts |
@@ -31,9 +32,51 @@ comments are updated in the same pull request.
 | Public site | `page_content`, `url_redirects` | Engine |
 | Audit | `audit_log` (append-only) | Engine |
 
-Views: `session_availability` (live seats), `waitlist_queue` (positions),
+Views: `user_effective_permissions` (what each account may do), `session_availability` (live seats), `waitlist_queue` (positions),
 `session_break_even`, `unsynced_items` (the console's unsynced list),
 `sessions_needing_instructor` (coverage board).
+
+## Accounts, roles and dashboards
+
+Everyone who signs in has one `user_accounts` row: office staff and
+instructors alike. Customers never sign in. What a person may do comes only
+from the roles granted to them in `user_roles`, and each role opens its own
+dashboard (`roles.dashboard_key`). A person with several roles switches
+between dashboards; `auth_sessions.active_role_code` remembers which one is
+open.
+
+- **Sign-in** is per account in `user_identities`: Microsoft 365 for staff,
+  an emailed one-time link for instructors. One person can have both.
+- **City-area limits.** A role grant can be limited to one city area
+  (`user_roles.scope_metro_id`), e.g. a manager for Houston only. A limited
+  grant never satisfies a check for another area or for all areas.
+- **Permissions** are named actions (`booking.transfer`,
+  `refund.approve_large`, ...). `user_has_permission(user, permission,
+  city_area)` is the single check the app uses; the database itself uses it
+  for extra seats and large refunds.
+- **Instructor permissions** (`own.*`) cover only that instructor's own
+  classes and pay. The app filters by their assignments.
+- **Lead vs helper instructor is not a role.** It is the job held in one
+  class (`assignments.role`). Both get the same `instructor` role and the
+  same view of that class; the differences are in how they are assigned, the
+  seats a helper adds, and the pay rate.
+- **History.** Revoking a role sets `revoked_at` (kept for history) and takes
+  effect immediately. Suspending an account removes all its permissions. The
+  audit log records the role each action was taken from.
+
+| Role | Dashboard for | Signs in with | Can do |
+|---|---|---|---|
+| Admin | Owner / system admin | Microsoft | Everything, including people, roles, settings and pay approval |
+| Manager | CS leads | Microsoft | Everything customer service can, plus large refunds, extra seats over the limit, private class details, attendance on any class, audit log, reports, resolving data problems, approving page wording |
+| Customer service | CS team | Microsoft | Find classes and students; phone and invoice bookings; transfer (single and whole class); cancel; refund within policy; edit details; notes; waiting lists; unsynced list |
+| Operations | Teaching operations | Microsoft | Post classes to instructors, approve who teaches, add/remove helpers, manage instructors, coverage board and alerts, private class details, export class lists, sync now, page wording, data problems, see all pay |
+| Helper instructor recruiting | Helper search team | Microsoft | Gets helper-demand alerts; sees classes, waiting lists, instructors, coverage |
+| Second-class approver | Location approvals | Microsoft | Gets second-class alerts; sees classes and waiting lists |
+| Viewer | Read-only overview | Microsoft | Sees classes, waiting lists, coverage, reports and system health |
+| Instructor | Teachers (lead or helper) | Emailed link | Own classes only: request and release classes, class list and private details, check-in and marks, export class list, availability, certifications, pay |
+
+The full permission list (46) and the role grants are in `db/seed.sql`, so
+changing who can do what is a data change, not a code change.
 
 ## Core relationships
 
@@ -124,7 +167,7 @@ These hold however the code is written. Each is covered by
 | An offered waitlist seat never returns to public sale | Every seat offer must carry a hold from the moment it is queued |
 | Waitlist list size, including groups | Deferred trigger on `waitlist_entries` against `sessions.waitlist_limit` |
 | Enrollware seats count against capacity | Included in the seat count. Recorded even if they overfill a class, which then sells nothing more. |
-| Manager-only overrides and large-refund approvals | Role check trigger on `seat_overrides` and `refunds` |
+| Manager-only overrides and large-refund approvals | Permission check (`user_has_permission`, city-area aware) on `seat_overrides` and `refunds` |
 | A Stripe price can't disagree with the displayed price | CHECK on `products` and `session_products` |
 | Each attendee in an order has their own email (else GHL merges contacts) | Unique `(order_id, attendee_email)` |
 | A person holds at most one live seat per class | Partial unique index |
@@ -209,7 +252,12 @@ These are modelled so either answer fits, but someone has to decide.
 9. **GHL "Pending" stage** is used for both new bookings and students moved
    out of a cancelled class. A separate stage would let GHL workflows tell
    them apart. `ghl_stage_map` supports either. *(Jennifer)*
-10. **Extra webhooks** beyond the plan's list: Stripe `charge.refunded` and
+10. **Who gets which role.** The plan names Jennifer (owner), Bre (operations
+    lead) and the CS team but not their system roles. Suggested: Jennifer
+    admin; Bre admin or manager + operations; CS team customer service;
+    Amanda viewer. Also: which roles should be limited to one city area as
+    more cities launch. *(Jennifer)*
+11. **Extra webhooks** beyond the plan's list: Stripe `charge.refunded` and
     `charge.dispute.created` (Dashboard refunds, chargebacks), and GHL
     `ContactDelete`. Recommended. *(Christopher)*
 
@@ -217,6 +265,6 @@ These are modelled so either answer fits, but someone has to decide.
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/schema.sql -f db/seed.sql   # empty database
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/tests/schema_checks.sql      # 38 checks, rolled back
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/tests/schema_checks.sql      # 45 checks, rolled back
 DATABASE_URL=postgresql:///postgres db/tests/last_seat_race.sh 40 12      # concurrent buyers
 ```

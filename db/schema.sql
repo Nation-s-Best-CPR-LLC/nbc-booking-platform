@@ -53,43 +53,123 @@ $$;
 
 
 -- =============================================================================
--- 1. STAFF, SETTINGS, POLICIES
+-- 1. ACCOUNTS, ROLES AND PERMISSIONS
 -- =============================================================================
+-- Everyone who signs in has one user account: office staff and instructors
+-- alike. What they may do comes only from their roles; each role has its own
+-- dashboard. Lead / helper (co-) instructor is NOT a role: it is the job an
+-- instructor holds in one class (assignments.role). Customers never sign in.
 
-CREATE TABLE staff_users (
+CREATE TABLE user_accounts (
   id                bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  -- Identity comes from Microsoft 365 (Entra ID). Bound on first sign-in;
-  -- pre-provisioned by email before that.
-  entra_object_id   uuid UNIQUE,
-  entra_tenant_id   uuid,
+  public_id         uuid NOT NULL UNIQUE DEFAULT gen_random_uuid(),
   email             citext NOT NULL UNIQUE,
   display_name      text NOT NULL,
-  -- Authorisation is ours: Entra says who you are, the engine says what you may do.
-  roles             text[] NOT NULL DEFAULT ARRAY['cs'],
-  is_active         boolean NOT NULL DEFAULT true,
+  status            text NOT NULL DEFAULT 'invited'
+                      CHECK (status IN ('invited', 'active', 'suspended', 'deactivated')),
   last_sign_in_at   timestamptz,
   created_at        timestamptz NOT NULL DEFAULT now(),
-  updated_at        timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT staff_roles_valid CHECK (
-    cardinality(roles) > 0
-    AND roles <@ ARRAY['cs','manager','ops','vendor_relations','otl','admin']::text[]
-  )
+  updated_at        timestamptz NOT NULL DEFAULT now()
 );
-COMMENT ON TABLE staff_users IS '[OWNED roles / MIRROR identity: Entra ID] CS console users. Entra is the identity provider; roles (cs, manager, ops, ...) live here.';
+COMMENT ON TABLE user_accounts IS '[OWNED] One row per person who can sign in (staff or instructor). Roles say what they may do.';
 
-CREATE FUNCTION staff_has_role(p_staff_id bigint, p_role text) RETURNS boolean
-LANGUAGE sql STABLE AS $$
+-- How an account signs in. Staff: Microsoft 365 (Entra ID). Instructors: a
+-- one-time link emailed to them. One account may have both.
+CREATE TABLE user_identities (
+  id                bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_account_id   bigint NOT NULL REFERENCES user_accounts (id) ON DELETE CASCADE,
+  provider          text NOT NULL CHECK (provider IN ('microsoft', 'email_link')),
+  subject           text NOT NULL,          -- Entra object id, or the sign-in email
+  tenant_id         uuid,                   -- Entra tenant (microsoft only)
+  first_used_at     timestamptz,
+  last_used_at      timestamptz,
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (provider, subject),
+  UNIQUE (user_account_id, provider),
+  CHECK (provider <> 'microsoft' OR tenant_id IS NOT NULL)
+);
+COMMENT ON TABLE user_identities IS '[REF: Entra ID / OWNED] Sign-in methods bound to an account. Passwords are never stored.';
+
+CREATE TABLE roles (
+  code              text PRIMARY KEY CHECK (code ~ '^[a-z][a-z_]*$'),
+  name              text NOT NULL,
+  description       text NOT NULL,
+  dashboard_key     text NOT NULL,          -- which dashboard this role opens
+  sign_in_method    text NOT NULL CHECK (sign_in_method IN ('microsoft', 'email_link')),
+  grants_all        boolean NOT NULL DEFAULT false,   -- admin: every permission, including future ones
+  is_scopable       boolean NOT NULL DEFAULT false,   -- may be limited to one city area
+  sort_order        integer NOT NULL DEFAULT 0
+);
+COMMENT ON TABLE roles IS '[OWNED] The roles people can hold, each with its own dashboard.';
+
+CREATE TABLE permissions (
+  code              text PRIMARY KEY CHECK (code ~ '^[a-z_]+(\.[a-z_]+)+$'),  -- 'booking.transfer'
+  area              text NOT NULL,          -- grouping for the admin screen
+  description       text NOT NULL,
+  own_records_only  boolean NOT NULL DEFAULT false   -- instructor permissions: only their own classes/pay
+);
+COMMENT ON TABLE permissions IS '[OWNED] Every action or screen that is access-controlled.';
+
+CREATE TABLE role_permissions (
+  role_code         text NOT NULL REFERENCES roles (code) ON DELETE CASCADE,
+  permission_code   text NOT NULL REFERENCES permissions (code) ON DELETE CASCADE,
+  PRIMARY KEY (role_code, permission_code)
+);
+COMMENT ON TABLE role_permissions IS '[OWNED] Which permissions each role grants.';
+
+CREATE TABLE user_roles (
+  id                   bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_account_id      bigint NOT NULL REFERENCES user_accounts (id) ON DELETE CASCADE,
+  role_code            text NOT NULL REFERENCES roles (code),
+  scope_metro_id       bigint,              -- null = all city areas (FK added after metros)
+  granted_by_user_id   bigint REFERENCES user_accounts (id),
+  granted_at           timestamptz NOT NULL DEFAULT now(),
+  revoked_at           timestamptz,
+  revoked_by_user_id   bigint REFERENCES user_accounts (id),
+  CHECK (revoked_at IS NULL OR revoked_by_user_id IS NOT NULL)
+);
+CREATE UNIQUE INDEX user_roles_one_live ON user_roles (user_account_id, role_code, COALESCE(scope_metro_id, 0))
+  WHERE revoked_at IS NULL;
+CREATE INDEX user_roles_account_idx ON user_roles (user_account_id) WHERE revoked_at IS NULL;
+COMMENT ON TABLE user_roles IS '[OWNED] Role grants, optionally limited to one city area. Revoked grants are kept for history.';
+
+-- Does this account hold this permission (in this city area, if given)?
+-- A grant limited to one city area never satisfies an all-areas check.
+CREATE FUNCTION user_has_permission(p_user_id bigint, p_permission text, p_metro_id bigint DEFAULT NULL)
+RETURNS boolean LANGUAGE sql STABLE AS $$
   SELECT EXISTS (
-    SELECT 1 FROM staff_users
-    WHERE id = p_staff_id AND is_active AND (p_role = ANY (roles) OR 'admin' = ANY (roles))
+    SELECT 1
+      FROM user_accounts a
+      JOIN user_roles ur ON ur.user_account_id = a.id AND ur.revoked_at IS NULL
+      JOIN roles r       ON r.code = ur.role_code
+     WHERE a.id = p_user_id
+       AND a.status = 'active'
+       AND (ur.scope_metro_id IS NULL OR ur.scope_metro_id = p_metro_id)
+       AND (r.grants_all OR EXISTS (SELECT 1 FROM role_permissions rp
+                                     WHERE rp.role_code = r.code AND rp.permission_code = p_permission))
   )
 $$;
+
+-- Everything an account may do, for building its menus and dashboards.
+CREATE VIEW user_effective_permissions AS
+SELECT DISTINCT ur.user_account_id, p.code AS permission_code, ur.scope_metro_id, p.own_records_only
+FROM user_roles ur
+JOIN user_accounts a ON a.id = ur.user_account_id AND a.status = 'active'
+JOIN roles r ON r.code = ur.role_code
+JOIN permissions p ON r.grants_all
+                   OR EXISTS (SELECT 1 FROM role_permissions rp WHERE rp.role_code = r.code AND rp.permission_code = p.code)
+WHERE ur.revoked_at IS NULL;
+
+
+-- =============================================================================
+-- 1b. SETTINGS AND POLICIES
+-- =============================================================================
 
 CREATE TABLE app_settings (
   key                 text PRIMARY KEY,
   value               jsonb NOT NULL,
   description         text NOT NULL,
-  updated_by_staff_id bigint REFERENCES staff_users (id),
+  updated_by_user_id bigint REFERENCES user_accounts (id),
   updated_at          timestamptz NOT NULL DEFAULT now()
 );
 COMMENT ON TABLE app_settings IS '[OWNED] Tunable business numbers (hold minutes, offer window, break-even inputs, alert days, GHL custom field ids). Changing one is a data change, not a deploy.';
@@ -159,6 +239,9 @@ CREATE TABLE metros (
   CHECK (booking_system = 'enrollware' OR cutover_at IS NOT NULL)
 );
 COMMENT ON TABLE metros IS '[MIRROR: Airtable + OWNED cutover state] A metro is on Enrollware or the engine, never both.';
+
+ALTER TABLE user_roles
+  ADD CONSTRAINT user_roles_scope_metro_fk FOREIGN KEY (scope_metro_id) REFERENCES metros (id);
 
 CREATE TABLE sites (
   id                    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -391,7 +474,7 @@ CREATE TABLE external_seat_reservations (
   counted_at    timestamptz NOT NULL,   -- as-of time of the count
   note          text,
   imported_at   timestamptz NOT NULL DEFAULT now(),
-  imported_by_staff_id bigint REFERENCES staff_users (id),
+  imported_by_user_id bigint REFERENCES user_accounts (id),
   UNIQUE (session_id, source)
 );
 COMMENT ON TABLE external_seat_reservations IS '[SNAPSHOT: Enrollware] Seat counts sold in Enrollware before cutover. Counts only; the rosters stay in Enrollware. Recorded even if they overfill a class (they are facts, not engine sales); the engine then sells nothing more and flags it.';
@@ -402,9 +485,9 @@ CREATE TABLE seat_overrides (
   session_id             bigint NOT NULL REFERENCES sessions (id),
   seats                  integer NOT NULL CHECK (seats > 0),
   reason                 text NOT NULL CHECK (length(trim(reason)) > 0),
-  approved_by_staff_id   bigint NOT NULL REFERENCES staff_users (id),
+  approved_by_user_id   bigint NOT NULL REFERENCES user_accounts (id),
   revoked_at             timestamptz,
-  revoked_by_staff_id    bigint REFERENCES staff_users (id),
+  revoked_by_user_id    bigint REFERENCES user_accounts (id),
   created_at             timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX seat_overrides_session_idx ON seat_overrides (session_id) WHERE revoked_at IS NULL;
@@ -479,7 +562,7 @@ CREATE TABLE orders (
   stripe_customer_id        text,               -- 'cus_...' only if Stripe created one
   stripe_invoice_id         text UNIQUE,        -- 'in_...' for invoice/PO orders
   terms_version_id          bigint REFERENCES policy_versions (id),
-  created_by_staff_id       bigint REFERENCES staff_users (id),  -- phone / invoice / admin orders
+  created_by_user_id       bigint REFERENCES user_accounts (id),  -- phone / invoice / admin orders
   -- Ad tracking: one shared event id so browser + server conversions dedupe.
   conversion_event_id       uuid NOT NULL UNIQUE DEFAULT gen_random_uuid(),
   tracking_consent          jsonb,              -- banner state at checkout: {"analytics":true,"ads":false}
@@ -496,7 +579,7 @@ CREATE TABLE orders (
   CHECK (amount_refunded_cents <= amount_paid_cents),
   CHECK (status <> 'awaiting_payment' OR invoice_due_on IS NOT NULL),
   CHECK (status <> 'paid' OR paid_at IS NOT NULL),
-  CHECK (channel NOT IN ('phone', 'invoice', 'admin') OR created_by_staff_id IS NOT NULL)
+  CHECK (channel NOT IN ('phone', 'invoice', 'admin') OR created_by_user_id IS NOT NULL)
 );
 CREATE INDEX orders_buyer_email_idx ON orders (buyer_email);
 CREATE INDEX orders_status_idx ON orders (status, created_at);
@@ -614,7 +697,7 @@ CREATE TABLE waitlist_offers (
   offered_session_id   bigint NOT NULL REFERENCES sessions (id),  -- original, or a second session
   seats                integer NOT NULL CHECK (seats > 0),
   trigger              text NOT NULL CHECK (trigger IN ('seat_freed', 'co_instructor_added', 'second_session', 'manual')),
-  offered_by_staff_id  bigint REFERENCES staff_users (id),  -- 'manual': CS re-offer after "Offer expired" 
+  offered_by_user_id  bigint REFERENCES user_accounts (id),  -- 'manual': CS re-offer after "Offer expired" 
   status               text NOT NULL DEFAULT 'queued'
                          CHECK (status IN ('queued', 'sent', 'accepted', 'expired', 'withdrawn')),
   send_after           timestamptz NOT NULL,      -- 8 AM–6 PM class local time
@@ -629,7 +712,7 @@ CREATE TABLE waitlist_offers (
   -- The seat is held from the moment the offer is queued (even overnight),
   -- so an offered seat never goes back on public sale (rules §6).
   CHECK (trigger = 'second_session' OR seat_hold_id IS NOT NULL),
-  CHECK (trigger <> 'manual' OR offered_by_staff_id IS NOT NULL)
+  CHECK (trigger <> 'manual' OR offered_by_user_id IS NOT NULL)
 );
 CREATE UNIQUE INDEX waitlist_offers_one_open ON waitlist_offers (waitlist_entry_id)
   WHERE status IN ('queued', 'sent');
@@ -725,10 +808,10 @@ CREATE TABLE registration_transfers (
   policy_rule              text,                       -- which rule applied, e.g. 'IT_7_13_DAYS_FEE'
   policy_version_id        bigint REFERENCES policy_versions (id),
   settlement_order_id      bigint REFERENCES orders (id),   -- extra charge
-  performed_by_staff_id    bigint REFERENCES staff_users (id),
+  performed_by_user_id    bigint REFERENCES user_accounts (id),
   created_at               timestamptz NOT NULL DEFAULT now(),
   CHECK (from_session_id <> to_session_id OR from_product_id <> to_product_id),
-  CHECK (via = 'customer_link' OR performed_by_staff_id IS NOT NULL)
+  CHECK (via = 'customer_link' OR performed_by_user_id IS NOT NULL)
 );
 CREATE INDEX registration_transfers_reg_idx ON registration_transfers (registration_id);
 CREATE INDEX registration_transfers_from_idx ON registration_transfers (from_session_id);
@@ -753,11 +836,11 @@ CREATE TABLE payments (
   received_at               timestamptz,
   disputed_at               timestamptz,
   manual_reference          text,          -- cheque no. etc. for 'manual'
-  recorded_by_staff_id      bigint REFERENCES staff_users (id),
+  recorded_by_user_id      bigint REFERENCES user_accounts (id),
   livemode                  boolean NOT NULL,
   created_at                timestamptz NOT NULL DEFAULT now(),
   updated_at                timestamptz NOT NULL DEFAULT now(),
-  CHECK (method <> 'manual' OR recorded_by_staff_id IS NOT NULL)
+  CHECK (method <> 'manual' OR recorded_by_user_id IS NOT NULL)
 );
 CREATE INDEX payments_order_idx ON payments (order_id);
 CREATE INDEX payments_invoice_idx ON payments (stripe_invoice_id);
@@ -780,8 +863,8 @@ CREATE TABLE refunds (
   status                     text NOT NULL DEFAULT 'requested' CHECK (status IN (
                                'requested', 'approved', 'processing', 'succeeded', 'failed', 'rejected')),
   requires_manager_approval  boolean NOT NULL DEFAULT false,
-  requested_by_staff_id      bigint REFERENCES staff_users (id),
-  approved_by_staff_id       bigint REFERENCES staff_users (id),
+  requested_by_user_id      bigint REFERENCES user_accounts (id),
+  approved_by_user_id       bigint REFERENCES user_accounts (id),
   approved_at                timestamptz,
   stripe_refund_id           text UNIQUE,   -- 're_...'
   processed_at               timestamptz,
@@ -791,8 +874,8 @@ CREATE TABLE refunds (
   updated_at                 timestamptz NOT NULL DEFAULT now(),
   CHECK (NOT requires_manager_approval
          OR status IN ('requested', 'rejected')
-         OR approved_by_staff_id IS NOT NULL),
-  CHECK (source <> 'console' OR requested_by_staff_id IS NOT NULL)
+         OR approved_by_user_id IS NOT NULL),
+  CHECK (source <> 'console' OR requested_by_user_id IS NOT NULL)
 );
 CREATE INDEX refunds_order_idx ON refunds (order_id);
 CREATE INDEX refunds_registration_idx ON refunds (registration_id);
@@ -813,7 +896,8 @@ CREATE TABLE instructors (
   public_id             uuid NOT NULL UNIQUE DEFAULT gen_random_uuid(),
   first_name            text NOT NULL,
   last_name             text NOT NULL,
-  email                 citext NOT NULL UNIQUE,         -- magic-link sign-in address
+  user_account_id       bigint UNIQUE REFERENCES user_accounts (id),  -- set when invited to the portal
+  email                 citext NOT NULL UNIQUE,         -- contact address (sign-in lives on the account)
   phone_e164            text CHECK (phone_e164 ~ '^\+[1-9][0-9]{7,14}$'),
   status                text NOT NULL DEFAULT 'active'
                           CHECK (status IN ('onboarding', 'active', 'inactive', 'suspended')),
@@ -831,7 +915,7 @@ CREATE TABLE instructors (
   updated_at            timestamptz NOT NULL DEFAULT now(),
   CHECK ((hub_metro_id IS NULL) = (hub_priority IS NULL))
 );
-COMMENT ON TABLE instructors IS '[OWNED from portal launch; MIRROR: Airtable before] Instructor profile used for eligibility, ranking and pay.';
+COMMENT ON TABLE instructors IS '[OWNED from portal launch; MIRROR: Airtable before] Teaching profile used for eligibility, ranking and pay. Linked to a user account (role "instructor") once invited to the portal. Lead vs helper is per class, in assignments.role.';
 
 CREATE TABLE instructor_certs (
   id                     bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -840,7 +924,7 @@ CREATE TABLE instructor_certs (
   cert_number            text,
   issued_on              date,
   expires_on             date NOT NULL,
-  verified_by_staff_id   bigint REFERENCES staff_users (id),
+  verified_by_user_id   bigint REFERENCES user_accounts (id),
   verified_at            timestamptz,
   created_at             timestamptz NOT NULL DEFAULT now(),
   updated_at             timestamptz NOT NULL DEFAULT now(),
@@ -906,7 +990,7 @@ CREATE TABLE class_offers (
   status                text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'awarded', 'cancelled')),
   opened_at             timestamptz NOT NULL DEFAULT now(),
   closed_at             timestamptz,
-  created_by_staff_id   bigint REFERENCES staff_users (id),
+  created_by_user_id   bigint REFERENCES user_accounts (id),
   created_at            timestamptz NOT NULL DEFAULT now(),
   updated_at            timestamptz NOT NULL DEFAULT now()
 );
@@ -937,7 +1021,7 @@ CREATE TABLE assignments (
   source                   text NOT NULL CHECK (source IN ('airtable', 'portal', 'console')),
   class_offer_request_id   bigint UNIQUE REFERENCES class_offer_requests (id),
   rate_cents               integer CHECK (rate_cents >= 0),   -- snapshot from the offer / rate card
-  awarded_by_staff_id      bigint REFERENCES staff_users (id),
+  awarded_by_user_id      bigint REFERENCES user_accounts (id),
   awarded_at               timestamptz NOT NULL DEFAULT now(),
   released_at              timestamptz,
   released_by              text CHECK (released_by IN ('instructor', 'ops')),
@@ -979,9 +1063,9 @@ CREATE TABLE attendance_marks (
   registration_id          bigint NOT NULL REFERENCES registrations (id),
   mark                     text NOT NULL CHECK (mark IN ('checked_in', 'complete', 'no_show', 'cleared')),
   marked_by_assignment_id  bigint REFERENCES assignments (id),   -- which instructor (lead or co)
-  marked_by_staff_id       bigint REFERENCES staff_users (id),
+  marked_by_user_id       bigint REFERENCES user_accounts (id),
   marked_at                timestamptz NOT NULL DEFAULT now(),
-  CHECK (num_nonnulls(marked_by_assignment_id, marked_by_staff_id) = 1)
+  CHECK (num_nonnulls(marked_by_assignment_id, marked_by_user_id) = 1)   -- instructors mark through their assignment
 );
 CREATE INDEX attendance_marks_reg_idx ON attendance_marks (registration_id, marked_at);
 COMMENT ON TABLE attendance_marks IS '[OWNED] Append-only check-in and Complete / No Show marks; each records who made it. registrations.status holds the current outcome.';
@@ -1019,7 +1103,7 @@ CREATE TABLE notes (
   registration_id   bigint REFERENCES registrations (id),
   order_id          bigint REFERENCES orders (id),
   session_id        bigint REFERENCES sessions (id),
-  author_staff_id   bigint NOT NULL REFERENCES staff_users (id),
+  author_user_id   bigint NOT NULL REFERENCES user_accounts (id),
   body              text NOT NULL CHECK (length(trim(body)) > 0),
   created_at        timestamptz NOT NULL DEFAULT now(),
   CHECK (num_nonnulls(person_id, registration_id, order_id, session_id) >= 1)
@@ -1037,37 +1121,36 @@ COMMENT ON TABLE notes IS '[OWNED] CS notes about bookings. Conversations (texts
 
 CREATE TABLE auth_sessions (
   token_hash       bytea PRIMARY KEY,               -- sha256 of the cookie value
-  principal_type   text NOT NULL CHECK (principal_type IN ('staff', 'instructor')),
-  staff_user_id    bigint REFERENCES staff_users (id),
-  instructor_id    bigint REFERENCES instructors (id),
+  user_account_id  bigint NOT NULL REFERENCES user_accounts (id) ON DELETE CASCADE,
+  identity_id      bigint REFERENCES user_identities (id),  -- which sign-in method was used
+  active_role_code text REFERENCES roles (code),     -- dashboard currently shown (multi-role users switch)
   created_at       timestamptz NOT NULL DEFAULT now(),
   expires_at       timestamptz NOT NULL,
   last_seen_at     timestamptz NOT NULL DEFAULT now(),
   revoked_at       timestamptz,
   ip               inet,
-  user_agent       text,
-  CHECK ((principal_type = 'staff') = (staff_user_id IS NOT NULL)),
-  CHECK ((principal_type = 'instructor') = (instructor_id IS NOT NULL))
+  user_agent       text
 );
 CREATE INDEX auth_sessions_expiry_idx ON auth_sessions (expires_at);
-COMMENT ON TABLE auth_sessions IS '[OWNED] Server-side sign-in sessions (revocable). Staff sign in through Entra; instructors through magic links.';
+CREATE INDEX auth_sessions_account_idx ON auth_sessions (user_account_id) WHERE revoked_at IS NULL;
+COMMENT ON TABLE auth_sessions IS '[OWNED] Server-side sign-in sessions (revocable). Staff sign in through Microsoft 365; instructors through emailed links.';
 
 CREATE TABLE action_tokens (
   id                 bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   purpose            text NOT NULL CHECK (purpose IN (
-                       'instructor_sign_in',  -- magic link
+                       'sign_in_link',        -- one-time sign-in link (instructors)
                        'waitlist_offer',      -- pay-for-your-offered-seat link
                        'rebook_choice',       -- pick-a-new-date link after a cancelled class
                        'phone_checkout')),    -- CS payment link landing page
   token_hash         bytea NOT NULL UNIQUE,   -- only the hash is stored
-  instructor_id      bigint REFERENCES instructors (id),
+  user_account_id    bigint REFERENCES user_accounts (id),
   registration_id    bigint REFERENCES registrations (id),
   waitlist_offer_id  bigint REFERENCES waitlist_offers (id),
   order_id           bigint REFERENCES orders (id),
   expires_at         timestamptz NOT NULL,
   used_at            timestamptz,
   created_at         timestamptz NOT NULL DEFAULT now(),
-  CHECK (purpose <> 'instructor_sign_in' OR instructor_id IS NOT NULL),
+  CHECK (purpose <> 'sign_in_link' OR user_account_id IS NOT NULL),
   CHECK (purpose <> 'waitlist_offer'     OR waitlist_offer_id IS NOT NULL),
   CHECK (purpose <> 'rebook_choice'      OR registration_id IS NOT NULL),
   CHECK (purpose <> 'phone_checkout'     OR order_id IS NOT NULL)
@@ -1167,7 +1250,7 @@ CREATE TABLE integration_runs (
                            'waitlist_cutoff', 'coverage_scan', 'sitemap_build', 'data_retention',
                            'enrollware_import', 'kpi_rollup')),
   trigger                text NOT NULL CHECK (trigger IN ('schedule', 'button', 'manual', 'webhook')),
-  triggered_by_staff_id  bigint REFERENCES staff_users (id),
+  triggered_by_user_id  bigint REFERENCES user_accounts (id),
   scope                  jsonb,              -- e.g. {"record_id":"rec..."} for a Sync-now button
   status                 text NOT NULL DEFAULT 'running'
                            CHECK (status IN ('running', 'succeeded', 'partial', 'failed')),
@@ -1194,7 +1277,7 @@ CREATE TABLE integration_issues (
   first_seen_at          timestamptz NOT NULL DEFAULT now(),
   last_seen_at           timestamptz NOT NULL DEFAULT now(),
   resolved_at            timestamptz,
-  resolved_by_staff_id   bigint REFERENCES staff_users (id)
+  resolved_by_user_id   bigint REFERENCES user_accounts (id)
 );
 CREATE UNIQUE INDEX integration_issues_open_uniq ON integration_issues (source, code, COALESCE(external_ref, ''))
   WHERE resolved_at IS NULL;
@@ -1202,7 +1285,7 @@ COMMENT ON TABLE integration_issues IS '[LEDGER] Problems found by syncs and rec
 
 CREATE TABLE notifications (
   id                    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  kind                  text NOT NULL,       -- 'coverage_alert_21', 'demand_alert', 'instructor_sign_in', ...
+  kind                  text NOT NULL,       -- 'coverage_alert_21', 'demand_alert', 'sign_in_link', ...
   audience              text NOT NULL CHECK (audience IN ('staff', 'instructor', 'customer')),
   channel               text NOT NULL CHECK (channel IN ('email', 'sms', 'teams')),
   provider              text NOT NULL CHECK (provider IN ('ghl', 'email_service', 'teams_webhook')),
@@ -1239,11 +1322,11 @@ CREATE TABLE page_content (
   block_key             text NOT NULL,       -- 'intro', 'who_its_for', 'what_to_bring', 'faq', ...
   body_markdown         text NOT NULL,
   status                text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'approved')),
-  approved_by_staff_id  bigint REFERENCES staff_users (id),
+  approved_by_user_id  bigint REFERENCES user_accounts (id),
   approved_at           timestamptz,
   updated_at            timestamptz NOT NULL DEFAULT now(),
   UNIQUE NULLS NOT DISTINCT (scope, state_code, metro_id, course_family_id, site_id, block_key),
-  CHECK (status <> 'approved' OR approved_by_staff_id IS NOT NULL),
+  CHECK (status <> 'approved' OR approved_by_user_id IS NOT NULL),
   CHECK (CASE scope
            WHEN 'global'       THEN num_nonnulls(state_code, metro_id, course_family_id, site_id) = 0
            WHEN 'state'        THEN state_code IS NOT NULL AND num_nonnulls(metro_id, course_family_id, site_id) = 0
@@ -1274,9 +1357,9 @@ COMMENT ON TABLE url_redirects IS '[OWNED] Old URLs that must keep working after
 CREATE TABLE audit_log (
   id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   occurred_at     timestamptz NOT NULL DEFAULT now(),
-  actor_type      text NOT NULL CHECK (actor_type IN ('staff', 'instructor', 'customer', 'system', 'webhook')),
-  staff_user_id   bigint REFERENCES staff_users (id),
-  instructor_id   bigint REFERENCES instructors (id),
+  actor_type      text NOT NULL CHECK (actor_type IN ('user', 'customer', 'system', 'webhook')),
+  user_account_id bigint REFERENCES user_accounts (id),
+  acting_role     text REFERENCES roles (code),   -- the role/dashboard the action was taken from
   action          text NOT NULL,       -- 'registration.transfer', 'refund.approve', 'session.capacity_override', ...
   entity_type     text NOT NULL,
   entity_id       bigint,
@@ -1285,11 +1368,10 @@ CREATE TABLE audit_log (
   after           jsonb,
   request_id      uuid,
   ip              inet,
-  CHECK (actor_type <> 'staff' OR staff_user_id IS NOT NULL),
-  CHECK (actor_type <> 'instructor' OR instructor_id IS NOT NULL)
+  CHECK ((actor_type = 'user') = (user_account_id IS NOT NULL))
 );
 CREATE INDEX audit_log_entity_idx ON audit_log (entity_type, entity_id, occurred_at);
-CREATE INDEX audit_log_staff_idx ON audit_log (staff_user_id, occurred_at);
+CREATE INDEX audit_log_user_idx ON audit_log (user_account_id, occurred_at);
 COMMENT ON TABLE audit_log IS '[OWNED] Every CS, ops and instructor action. Rows can never be changed or deleted.';
 
 CREATE FUNCTION audit_log_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -1469,24 +1551,29 @@ END $$;
 CREATE TRIGGER sessions_room_hosts_family BEFORE INSERT OR UPDATE OF room_id, course_family_id ON sessions
   FOR EACH ROW EXECUTE FUNCTION trg_room_hosts_family();
 
--- Overrides need a manager; manager-flagged refunds need a manager approver.
-CREATE FUNCTION trg_require_manager() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE v_staff bigint;
+-- The two money-and-seat decisions the plan reserves for managers are also
+-- checked in the database: extra seats over the limit, and large refunds.
+CREATE FUNCTION trg_require_permission() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE v_user bigint; v_perm text; v_metro bigint;
 BEGIN
-  v_staff := CASE TG_TABLE_NAME
-               WHEN 'seat_overrides' THEN NEW.approved_by_staff_id
-               WHEN 'refunds'        THEN NEW.approved_by_staff_id
-             END;
-  IF v_staff IS NOT NULL AND NOT staff_has_role(v_staff, 'manager') THEN
-    RAISE EXCEPTION 'staff user % is not a manager', v_staff USING ERRCODE = 'insufficient_privilege';
+  v_perm := TG_ARGV[0];
+  v_user := NEW.approved_by_user_id;
+  IF TG_TABLE_NAME = 'seat_overrides' THEN
+    SELECT metro_id INTO v_metro FROM sessions WHERE id = NEW.session_id;
+  ELSE
+    SELECT se.metro_id INTO v_metro
+      FROM registrations r JOIN sessions se ON se.id = r.session_id WHERE r.id = NEW.registration_id;
+  END IF;
+  IF v_user IS NOT NULL AND NOT user_has_permission(v_user, v_perm, v_metro) THEN
+    RAISE EXCEPTION 'user % lacks permission %', v_user, v_perm USING ERRCODE = 'insufficient_privilege';
   END IF;
   RETURN NEW;
 END $$;
-CREATE TRIGGER seat_overrides_manager BEFORE INSERT OR UPDATE OF approved_by_staff_id ON seat_overrides
-  FOR EACH ROW EXECUTE FUNCTION trg_require_manager();
-CREATE TRIGGER refunds_manager BEFORE INSERT OR UPDATE OF approved_by_staff_id ON refunds
+CREATE TRIGGER seat_overrides_permission BEFORE INSERT OR UPDATE OF approved_by_user_id ON seat_overrides
+  FOR EACH ROW EXECUTE FUNCTION trg_require_permission('class.capacity_override');
+CREATE TRIGGER refunds_permission BEFORE INSERT OR UPDATE OF approved_by_user_id ON refunds
   FOR EACH ROW WHEN (NEW.requires_manager_approval)
-  EXECUTE FUNCTION trg_require_manager();
+  EXECUTE FUNCTION trg_require_permission('refund.approve_large');
 
 -- Co-instructors only at co-instructor locations.
 CREATE FUNCTION trg_co_instructor_room_check() RETURNS trigger LANGUAGE plpgsql AS $$

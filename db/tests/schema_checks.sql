@@ -38,9 +38,12 @@ END $$;
 -- ---------------------------------------------------------------------------
 -- Fixtures: Richmond, one co-instructor room (20) and one small room (12).
 -- ---------------------------------------------------------------------------
-INSERT INTO staff_users (email, display_name, roles) VALUES
-  ('cs@example.test', 'CS Agent', '{cs}'),
-  ('mgr@example.test', 'Manager', '{cs,manager}');
+INSERT INTO user_accounts (email, display_name, status) VALUES
+  ('cs@example.test', 'CS Agent', 'active'),
+  ('mgr@example.test', 'Manager', 'active');
+INSERT INTO user_roles (user_account_id, role_code)
+SELECT id, 'customer_service' FROM user_accounts WHERE email = 'cs@example.test'
+UNION ALL SELECT id, 'manager' FROM user_accounts WHERE email = 'mgr@example.test';
 
 INSERT INTO metros (slug, name, state_code, market_code, time_zone, is_hub, booking_system, cutover_at)
 VALUES ('richmond-va', 'Richmond', 'VA', 'RVA', 'America/New_York', true, 'engine', now());
@@ -86,8 +89,8 @@ SELECT
   (SELECT id FROM products WHERE code = 'AP_BL')                     AS ap,
   (SELECT id FROM products WHERE code = 'AD_BL')                     AS adult,
   (SELECT id FROM products WHERE code = 'BLS_BL')                    AS bls,
-  (SELECT id FROM staff_users WHERE email = 'cs@example.test')       AS cs,
-  (SELECT id FROM staff_users WHERE email = 'mgr@example.test')      AS mgr;
+  (SELECT id FROM user_accounts WHERE email = 'cs@example.test')       AS cs,
+  (SELECT id FROM user_accounts WHERE email = 'mgr@example.test')      AS mgr;
 
 -- Book n seats of a product as one paid web order (hold → confirmed), the
 -- way the engine will: hold first, then convert in the webhook transaction.
@@ -153,17 +156,17 @@ SELECT pg_temp.expect_error(format('UPDATE sessions SET capacity = 21 WHERE id =
   'class max cannot exceed the room''s Max Student Count') FROM ids;
 
 SELECT pg_temp.expect_error(format(
-  $q$INSERT INTO seat_overrides (session_id, seats, reason, approved_by_staff_id) VALUES (%s, 1, 'VIP', %s)$q$, s1, cs),
-  '42501', 'non-manager cannot approve a capacity override') FROM ids;
+  $q$INSERT INTO seat_overrides (session_id, seats, reason, approved_by_user_id) VALUES (%s, 1, 'VIP', %s)$q$, s1, cs),
+  '42501', 'customer service cannot approve a capacity override') FROM ids;
 
-INSERT INTO seat_overrides (session_id, seats, reason, approved_by_staff_id)
+INSERT INTO seat_overrides (session_id, seats, reason, approved_by_user_id)
 SELECT s1, 1, 'Employer group of 8 needs one more', mgr FROM ids;
 SELECT pg_temp.book(s1, ap, 1, 'override') FROM ids;
 SELECT pg_temp.check((SELECT sold_seats = 13 AND seats_left = 0 FROM session_availability, ids WHERE session_id = s1),
   'manager override adds a 13th seat');
 
 SELECT pg_temp.expect_error(format(
-  'UPDATE seat_overrides SET revoked_at = now(), revoked_by_staff_id = %s WHERE session_id = %s', mgr, s1),
+  'UPDATE seat_overrides SET revoked_at = now(), revoked_by_user_id = %s WHERE session_id = %s', mgr, s1),
   '23514', 'override cannot be revoked once its seat is sold') FROM ids;
 
 INSERT INTO instructors (first_name, last_name, email) VALUES
@@ -239,12 +242,12 @@ SELECT pg_temp.expect_error(format(
 -- Refunds, webhooks, audit
 -- ---------------------------------------------------------------------------
 SELECT pg_temp.expect_error(format(
-  $q$INSERT INTO refunds (order_id, amount_cents, reason, requires_manager_approval, status, requested_by_staff_id, approved_by_staff_id)
+  $q$INSERT INTO refunds (order_id, amount_cents, reason, requires_manager_approval, status, requested_by_user_id, approved_by_user_id)
      SELECT id, 10800, 'goodwill', true, 'approved', %s, %s FROM orders LIMIT 1$q$, cs, cs),
-  '42501', 'large refund cannot be approved by a non-manager') FROM ids;
+  '42501', 'customer service cannot approve a large refund') FROM ids;
 
 SELECT pg_temp.expect_error(format(
-  $q$INSERT INTO refunds (order_id, amount_cents, reason, requires_manager_approval, status, requested_by_staff_id)
+  $q$INSERT INTO refunds (order_id, amount_cents, reason, requires_manager_approval, status, requested_by_user_id)
      SELECT id, 10800, 'goodwill', true, 'approved', %s FROM orders LIMIT 1$q$, cs),
   '23514', 'large refund cannot be marked approved without an approver') FROM ids;
 
@@ -348,6 +351,58 @@ SELECT pg_temp.expect_error(
   $q$UPDATE registrations SET status = 'forfeited', cancelled_at = now()
      WHERE id = (SELECT min(id) FROM registrations WHERE status = 'confirmed')$q$,
   '23514', 'a forfeit or cancellation must record its reason code');
+
+-- ---------------------------------------------------------------------------
+-- Accounts, roles and permissions
+-- ---------------------------------------------------------------------------
+INSERT INTO user_accounts (email, display_name, status) VALUES
+  ('hou-mgr@example.test', 'Houston Manager', 'active'),
+  ('admin@example.test',   'Admin',           'active'),
+  ('teach@example.test',   'Instructor',      'active');
+INSERT INTO user_roles (user_account_id, role_code, scope_metro_id)
+SELECT id, 'manager', (SELECT id FROM metros WHERE slug = 'houston-tx') FROM user_accounts WHERE email = 'hou-mgr@example.test'
+UNION ALL SELECT id, 'admin', NULL FROM user_accounts WHERE email = 'admin@example.test'
+UNION ALL SELECT id, 'instructor', NULL FROM user_accounts WHERE email = 'teach@example.test';
+
+SELECT pg_temp.expect_error(
+  $q$INSERT INTO seat_overrides (session_id, seats, reason, approved_by_user_id)
+     SELECT (SELECT id FROM sessions WHERE slug = 'unpublished'), 1, 'test',
+            (SELECT id FROM user_accounts WHERE email = 'hou-mgr@example.test')$q$,
+  '42501', 'a Houston-only manager cannot add seats to a Richmond class');
+INSERT INTO seat_overrides (session_id, seats, reason, approved_by_user_id)
+SELECT (SELECT id FROM sessions WHERE slug = 'hou-1'), 1, 'test',
+       (SELECT id FROM user_accounts WHERE email = 'hou-mgr@example.test');
+SELECT pg_temp.check(true, 'a Houston-only manager can add seats to a Houston class');
+
+SELECT pg_temp.check(
+  user_has_permission((SELECT id FROM user_accounts WHERE email = 'admin@example.test'), 'pay.approve')
+  AND user_has_permission((SELECT id FROM user_accounts WHERE email = 'admin@example.test'), 'settings.manage'),
+  'admin holds every permission');
+
+SELECT pg_temp.check(
+  user_has_permission((SELECT id FROM user_accounts WHERE email = 'teach@example.test'), 'own.classes_view')
+  AND NOT user_has_permission((SELECT id FROM user_accounts WHERE email = 'teach@example.test'), 'class.view')
+  AND NOT user_has_permission((SELECT id FROM user_accounts WHERE email = 'teach@example.test'), 'student.view'),
+  'instructors see only their own classes, not all classes or students');
+
+SELECT pg_temp.check(
+  (SELECT count(*) FROM user_effective_permissions WHERE user_account_id = (SELECT mgr FROM ids))
+  > (SELECT count(*) FROM user_effective_permissions WHERE user_account_id = (SELECT cs FROM ids)),
+  'manager includes everything customer service has, plus more');
+
+UPDATE user_roles SET revoked_at = now(), revoked_by_user_id = (SELECT id FROM user_accounts WHERE email = 'admin@example.test')
+WHERE user_account_id = (SELECT cs FROM ids);
+SELECT pg_temp.check(NOT user_has_permission((SELECT cs FROM ids), 'booking.transfer'),
+  'a revoked role stops working at once');
+
+UPDATE user_accounts SET status = 'suspended' WHERE id = (SELECT mgr FROM ids);
+SELECT pg_temp.check(NOT user_has_permission((SELECT mgr FROM ids), 'refund.approve_large'),
+  'a suspended account loses all permissions');
+
+SELECT pg_temp.expect_error(
+  $q$INSERT INTO user_roles (user_account_id, role_code)
+     SELECT id, 'instructor' FROM user_accounts WHERE email = 'teach@example.test'$q$,
+  '23505', 'the same role cannot be granted twice');
 
 \echo 'All schema checks passed.'
 ROLLBACK;
