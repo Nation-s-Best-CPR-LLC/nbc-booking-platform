@@ -1,14 +1,13 @@
 -- =============================================================================
 -- Demo data for local development and the static preview. NEVER load this
 -- into staging or production.
---   psql "$DATABASE_URL" -f db/schema.sql -f db/seed.sql -f db/demo.sql
+--   flask --app wsgi db upgrade && flask --app wsgi db load-demo
+--   (or: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/schema.sql -f db/seed.sql -f db/demo.sql)
 -- Every demo account signs in with the password: demo-password
 -- Richmond classes for the January 2027 pilot. People, emails and bookings are
 -- invented (example.test addresses). Henrico's address is from the launch hub;
 -- the other two sites' addresses come from Airtable later, so they say so.
 -- =============================================================================
-\set ON_ERROR_STOP on
-BEGIN;
 
 -- City areas -------------------------------------------------------------------
 INSERT INTO metros (slug, name, state_code, market_code, time_zone, is_hub, booking_system, cutover_at) VALUES
@@ -195,7 +194,7 @@ INSERT INTO user_accounts (email, display_name, status, signup_intent) VALUES
   ('alder1@example.test',       'Alex Alder',   'active', 'student');
 INSERT INTO user_roles (user_account_id, role_code)
 SELECT id, 'user' FROM user_accounts WHERE email IN ('riley.brooks@example.test', 'jamie.ortiz@example.test', 'alder1@example.test');
-SELECT grant_student_role_if_booked(id) FROM user_accounts WHERE email = 'alder1@example.test' \gset
+SELECT grant_student_role_if_booked(id) FROM user_accounts WHERE email = 'alder1@example.test';
 
 -- Everyone signs in with email + "demo-password" (local only).
 INSERT INTO user_identities (user_account_id, provider, subject, password_hash, password_changed_at)
@@ -209,4 +208,4 @@ INSERT INTO integration_issues (source, severity, code, entity_type, external_re
 VALUES ('airtable', 'warning', 'MISSING_PARKING_NOTES', 'site', 'recDEMOmoorefield',
         'Moorefield has no public parking notes in Master Locations.');
 
-COMMIT;
+

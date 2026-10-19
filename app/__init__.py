@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from flask import Flask, render_template
 
-from . import auth, db, filters, security
+from . import auth, cli, db, filters, security
 from .config import Config
 
 
@@ -19,6 +19,7 @@ def create_app(overrides: dict | None = None) -> Flask:
     security.init_app(app)
     auth.init_app(app)
     filters.init_app(app)
+    cli.init_app(app)
 
     from .blueprints import account, health, public, webhooks
 

@@ -6,9 +6,12 @@ PostgreSQL 16 (Replit PostgreSQL). The schema is in
 What the engine keeps from each outside platform, and why, is in
 [`source-of-truth.md`](source-of-truth.md).
 
-When the app is scaffolded, `schema.sql` becomes the first Alembic migration.
-After that, changes go through migrations, and this file and the schema
-comments are updated in the same pull request.
+The database is created and changed by the Alembic migrations in
+[`migrations/`](../migrations/) (`flask --app wsgi db upgrade`). Migration
+0001 is `schema.sql` and 0002 is `seed.sql`, frozen as of Oct 19, 2026.
+`schema.sql` stays the readable picture of the whole current database: every
+later migration updates it too, and `db/tests/migrations_match.sh` checks
+that the two agree.
 
 ## Table map
 
@@ -280,7 +283,7 @@ These are modelled so either answer fits, but someone has to decide.
 ## Running the checks
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/schema.sql -f db/seed.sql   # empty database
+flask --app wsgi db upgrade                                                 # empty database
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/tests/schema_checks.sql      # 45 checks, rolled back
 DATABASE_URL=postgresql:///postgres db/tests/last_seat_race.sh 40 12      # concurrent buyers
 ```

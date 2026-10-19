@@ -17,8 +17,12 @@ and `docs/database-architecture.md` before changing data or integrations.
   `FOR NO KEY UPDATE`, never `FOR UPDATE` (it deadlocks against foreign keys).
 - Money is integer cents. Times are timestamptz; show class times in the
   class's own time zone (`filters.local_dt`).
-- Schema changes: edit `db/schema.sql` (until Alembic is added), add a check to
-  `db/tests/schema_checks.sql`, update the docs in the same PR.
+- Schema changes go through a migration: `flask --app wsgi db new "..."`,
+  plain SQL in `upgrade()` and a real `downgrade()`. Never edit an existing
+  migration or its frozen file in `migrations/sql/`. In the same PR, apply the
+  change to `db/schema.sql` (and `db/seed.sql` for reference data) so they
+  still describe the whole database, add a check to
+  `db/tests/schema_checks.sql`, and run `db/tests/migrations_match.sh`.
 
 ## Security and privacy
 - Public pages never select from `*_private_details` (access codes, on-site
@@ -45,5 +49,5 @@ and `docs/database-architecture.md` before changing data or integrations.
   on customer pages.
 
 ## Checks before a PR
-`pytest` (with `TEST_DATABASE_URL`), `db/tests/schema_checks.sql`, and
-`scripts/export_preview.py` still runs.
+`pytest` (with `TEST_DATABASE_URL`), `db/tests/schema_checks.sql`,
+`db/tests/migrations_match.sh`, and `scripts/export_preview.py` still runs.

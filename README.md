@@ -20,8 +20,11 @@ app/                 Flask app
     webhooks.py      /webhooks/stripe, /webhooks/ghl (stubs until phases 3 and 4)
     health.py        /healthz
   templates/, static/app.css   styled after nationsbestcpr.com
+migrations/          database migrations (Alembic): run with `flask --app wsgi db upgrade`
+  versions/          0001 initial schema, 0002 reference data, ...
+  sql/               the frozen SQL each migration runs
 db/
-  schema.sql         the database (59 tables): see docs/database-architecture.md
+  schema.sql         the whole current database in one file (reference; kept equal to the migrations)
   seed.sql           course families, settings, roles and permissions
   demo.sql           invented Richmond classes and accounts (local only, never production)
   tests/             database rule checks and the last-seat race test
@@ -50,10 +53,10 @@ python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 
 createdb nbc
-psql nbc -v ON_ERROR_STOP=1 -f db/schema.sql -f db/seed.sql -f db/demo.sql
-
-cp .env.example .env           # set DATABASE_URL=postgresql:///nbc
-flask --app wsgi run --debug   # http://localhost:5000
+cp .env.example .env              # set DATABASE_URL=postgresql:///nbc
+flask --app wsgi db upgrade       # creates every table and loads roles, settings, course types
+flask --app wsgi db load-demo     # optional: invented Richmond classes and accounts (local only)
+flask --app wsgi run --debug      # http://localhost:5000
 ```
 
 Demo accounts all use the password `demo-password` (local only), for example
@@ -67,6 +70,7 @@ Or create your own at `/create-account`.
 createdb nbc_test
 psql nbc_test -v ON_ERROR_STOP=1 -f db/schema.sql -f db/seed.sql -f db/demo.sql
 TEST_DATABASE_URL=postgresql:///nbc_test pytest                    # app tests
+DATABASE_URL=postgresql:///postgres db/tests/migrations_match.sh   # migrations = db/schema.sql + seed.sql
 psql nbc_test -v ON_ERROR_STOP=1 -f db/tests/schema_checks.sql     # database rules
 DATABASE_URL=postgresql:///postgres db/tests/last_seat_race.sh 40 12
 ```
@@ -82,13 +86,59 @@ page as each kind of account sees it (links rewritten, stylesheet inlined,
 forms switched off). `build/preview/index.html`
 lists them all. `build/` is not committed.
 
+## Database migrations
+
+The database is built and changed only through migrations in `migrations/`.
+
+| Command (from the repo root) | What it does |
+|---|---|
+| `flask --app wsgi db upgrade` | Creates or updates the database to the latest version. Safe to run again: it only runs what's missing. |
+| `flask --app wsgi db current` | Shows which version the database is on (`0002 (head)` = up to date). |
+| `flask --app wsgi db history` | Lists every migration. |
+| `flask --app wsgi db downgrade -1` | Undoes the last migration (asks first; `base` undoes all). |
+| `flask --app wsgi db new "what changes"` | Starts the next numbered migration file. |
+| `flask --app wsgi db load-demo` | Loads demo data into an empty database. Refused unless `APP_ENV=local`. |
+
+Each migration runs in one transaction: if any statement fails, nothing from
+that migration is kept. `alembic upgrade head` works too.
+
+## Set up the database on Replit
+
+In the Replit workspace shell, after the code is in the Repl:
+
+1. Add a PostgreSQL database from Replit's Database tool. Replit then sets
+   `DATABASE_URL` for you; don't paste it anywhere else.
+2. In Secrets, set `APP_ENV` (`staging` or `production`) and `SECRET_KEY`
+   (32+ random characters, e.g. from `python -c "import secrets; print(secrets.token_urlsafe(48))"`).
+3. Run:
+   ```bash
+   pip install -r requirements.txt
+   flask --app wsgi db upgrade
+   flask --app wsgi db current        # expect: 0002 (head)
+   ```
+4. Start the app (Run) and open `/healthz`: `"status": "ok"` and
+   `"database_env_matches": true` mean the database is ready and belongs to
+   this environment.
+
+Notes:
+- The upgrade records `APP_ENV` in the database (`app_settings.environment`),
+  so a staging app pointed at the production database shows up as a mismatch
+  on `/healthz`.
+- Replit's published app uses its own production database, separate from the
+  workspace one. Run the same `db upgrade` against it before the first
+  publish and after every release that adds a migration (check Replit's
+  Database tool for how to reach the production database from the shell).
+- The schema needs the PostgreSQL extensions `citext`, `pg_trgm` and
+  `btree_gist`; the first migration installs them. If the upgrade stops with
+  "permission denied to create extension", the database user can't install
+  extensions and the hosting settings need changing first.
+- Never run `db load-demo` there (it refuses anyway).
+
 ## Deploy (Replit Reserved VM)
 
-`.replit` runs gunicorn on port 5000. Set these as Replit Secrets:
-`APP_ENV` (`staging` or `production`), `DATABASE_URL`, `SECRET_KEY` (32+
-random characters), `PUBLIC_BASE_URL`. Load `db/schema.sql` and `db/seed.sql`
-into the database, then set `app_settings.environment` to match `APP_ENV`
-(`/healthz` reports a mismatch). Never load `db/demo.sql` there.
+`.replit` runs gunicorn on port 5000. Secrets: `APP_ENV`, `SECRET_KEY`,
+`PUBLIC_BASE_URL` (Replit provides `DATABASE_URL`). Run the database steps
+above before the first publish.
 
 ## Build phases
 
