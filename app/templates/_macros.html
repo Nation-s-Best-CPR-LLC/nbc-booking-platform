@@ -1,0 +1,21 @@
+{% macro seat_meter(left, limit) -%}
+{%- set taken = [limit - left, 0]|max -%}
+<div class="seats">
+  <div class="seat-row" aria-hidden="true">
+    {%- for i in range([limit, 24]|min) %}<span class="seat{% if i < taken %} taken{% endif %}"></span>{% endfor -%}
+  </div>
+  {%- if left <= 0 %}
+  <span class="seat-label full">Full</span>
+  {%- elif left <= 3 %}
+  <span class="seat-label low">{{ left }} of {{ limit }} seats left</span>
+  {%- else %}
+  <span class="seat-label">{{ left }} of {{ limit }} seats left</span>
+  {%- endif %}
+</div>
+{%- endmacro %}
+
+{% macro offer_prices(offers) -%}
+<div class="prices">
+  {%- for o in offers or [] %}<span>{{ o.name }} <strong>{{ o.price|money }}</strong></span>{% endfor -%}
+</div>
+{%- endmacro %}

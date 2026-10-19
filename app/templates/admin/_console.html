@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block header %}
+<header class="site-header"><div class="wrap">
+  <a class="brand" href="{{ url_for('admin.index') }}">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span><span class="brand-name">Nation's Best CPR</span> <span class="brand-sub">Staff</span></span>
+  </a>
+  {% if current_user %}
+  <nav class="header-nav" aria-label="Account">
+    <span class="muted small">{{ current_user.display_name }}</span>
+    {% if config.PREVIEW_MODE %}
+    <a class="btn secondary" href="{{ url_for('admin.sign_in_page') }}">Switch account</a>
+    {% else %}
+    <form method="post" action="{{ url_for('admin.sign_out') }}"><button class="btn secondary" type="submit">Sign out</button></form>
+    {% endif %}
+  </nav>
+  {% endif %}
+</div></header>
+{% endblock %}
+{% block subheader %}
+{% if current_user and current_user.roles|length > 0 %}
+<nav class="console-bar" aria-label="Your dashboards"><div class="wrap">
+  {% for r in current_user.roles %}
+  {% set href = url_for('portal.index') if r.code == 'instructor' else url_for('admin.dashboard', role_code=r.code) %}
+  <a class="role-tab" href="{{ href }}" {% if active_role == r.code %}aria-current="page"{% endif %}>{{ r.name }}{% if r.scope_metro_name %} · {{ r.scope_metro_name }}{% endif %}</a>
+  {% endfor %}
+</div></nav>
+{% endif %}
+{% endblock %}

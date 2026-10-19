@@ -1,0 +1,100 @@
+{% extends "admin/_console.html" %}
+{% from "_macros.html" import seat_meter %}
+{% set active_role = role.code %}
+{% block title %}{{ role.name }} dashboard{% endblock %}
+{% block content %}
+<div class="stack-lg">
+  <div class="page-head">
+    <span class="eyebrow">{{ role.name }} dashboard{% if role.scope_metro_name %} · {{ role.scope_metro_name }} only{% endif %}</span>
+    <h1>{{ role.description }}</h1>
+  </div>
+
+  {% if panels.health %}
+  <div class="panel panel-body">
+    <div class="stat-row">
+      <div class="stat"><span class="eyebrow">Waiting to sync</span><span class="value">{{ panels.health.unsynced }}</span><span class="muted small">Changes not yet in GHL or Airtable</span></div>
+      <div class="stat"><span class="eyebrow">Data problems</span><span class="value">{{ panels.health.open_issues }}</span><span class="muted small">Open items to fix</span></div>
+      <div class="stat"><span class="eyebrow">Last schedule copy</span><span class="value small">{{ panels.health.last_sync_at.strftime('%b %-d, %-I:%M %p UTC') if panels.health.last_sync_at else 'Not run yet' }}</span><span class="muted small">From the planning spreadsheet</span></div>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="dash">
+    <div class="stack-lg">
+      {% if panels.coverage is defined %}
+      <section class="panel">
+        <div class="panel-head"><h2>Classes that need an instructor</h2><span class="badge {{ 'alert' if panels.coverage else 'ok' }}">{{ panels.coverage|length }}</span></div>
+        <div class="table-scroll">
+        <table class="timetable">
+          <thead><tr><th>Class</th><th>Where</th><th>Days out</th><th>Status</th></tr></thead>
+          <tbody>
+          {% for c in panels.coverage %}
+          <tr>
+            <td class="date-cell"><strong>{{ class_date(c.starts_at, c.time_zone) }}</strong><span class="muted small">{{ c.course_name }}</span></td>
+            <td>{{ c.site_name }}<br><span class="muted small">{{ c.metro_name }}</span></td>
+            <td class="num">{{ c.days_out }}</td>
+            <td>{% if c.days_out <= 7 %}<span class="badge alert">Escalate</span>{% elif c.days_out <= 21 %}<span class="badge warn">Alerted</span>{% else %}<span class="badge">{{ 'Offered' if c.offer_open else 'Not offered' }}</span>{% endif %}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="muted">Every upcoming class has a lead instructor.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        </div>
+      </section>
+      {% endif %}
+
+      {% if panels.classes is defined %}
+      <section class="panel">
+        <div class="panel-head"><h2>Upcoming classes</h2><span class="muted small">Next {{ panels.classes|length }}</span></div>
+        <div class="table-scroll">
+        <table class="timetable">
+          <thead><tr><th>Class</th><th>Where</th><th>Lead instructor</th><th>Seats</th></tr></thead>
+          <tbody>
+          {% for c in panels.classes %}
+          <tr>
+            <td class="date-cell"><strong>{{ class_date(c.starts_at, c.time_zone) }}</strong><span class="muted small">{{ c.course_name }} · {{ class_time(c.starts_at, c.ends_at, c.time_zone) }}</span></td>
+            <td>{{ c.site_name }}<br><span class="muted small">{{ c.metro_name }}</span></td>
+            <td>{{ c.lead_name or '—' }}</td>
+            <td>{{ seat_meter(c.seats_left, c.seat_limit) }}{% if c.waitlist_count %}<span class="muted small num">{{ c.waitlist_count }} waiting</span>{% endif %}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="muted">No upcoming classes.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        </div>
+      </section>
+      {% endif %}
+
+      {% if panels.waitlists is defined %}
+      <section class="panel">
+        <div class="panel-head"><h2>Waiting lists</h2><span class="badge">{{ panels.waitlists|length }} class{{ '' if panels.waitlists|length == 1 else 'es' }}</span></div>
+        <div class="panel-body stack">
+          {% for w in panels.waitlists %}
+          <div style="display:flex; justify-content:space-between; gap:1rem; flex-wrap:wrap">
+            <span><strong>{{ class_date(w.starts_at, w.time_zone) }}</strong> · {{ w.course_name }} · {{ w.site_name }}</span>
+            <span class="num">{{ w.waitlist_count }} of {{ w.waitlist_limit }} waiting · <span class="muted">{{ 'room fits a helper' if w.location_type == 'co_instructor' else 'one-instructor room' }}</span></span>
+          </div>
+          {% else %}
+          <p class="muted">Nobody is waiting for a seat.</p>
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
+    </div>
+
+    <aside class="panel">
+      <div class="panel-head"><h2>What this role can do</h2></div>
+      <div class="panel-body stack">
+        {% for area, items in permissions.items() %}
+        <div class="perm-group">
+          <span class="eyebrow">{{ area }}</span>
+          <ul>{% for p in items %}<li>{{ p.description }}</li>{% endfor %}</ul>
+        </div>
+        {% endfor %}
+      </div>
+    </aside>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Find a CPR or First Aid class{% endblock %}
+{% block content %}
+<div class="stack-lg">
+  <div class="page-head">
+    <span class="eyebrow">Step 1 of 4 · City</span>
+    <h1>Find a CPR, First Aid or BLS class</h1>
+    <p class="muted">American Red Cross certification classes. Pick your city, then the course, date and location.</p>
+  </div>
+
+  {% if metros %}
+  <div class="grid">
+    {% for m in metros %}
+    <a class="panel choice" href="{{ url_for('public.metro', metro_slug=m.slug) }}">
+      <h2>{{ m.name }}, {{ m.state_code }}</h2>
+      <span class="muted small num">
+        {% if m.upcoming %}{{ m.upcoming }} upcoming class{{ '' if m.upcoming == 1 else 'es' }} · next {{ class_date(m.next_starts_at, m.time_zone) }}{% else %}No classes scheduled yet{% endif %}
+      </span>
+      <span class="go">See classes →</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="notice">No cities are booking here yet.</p>
+  {% endif %}
+
+  {% if coming %}
+  <div class="stack">
+    <h2>Other cities</h2>
+    <p class="muted small">These cities still book through our current registration site and move here one at a time:
+      {% for c in coming %}{{ c.name }}, {{ c.state_code }}{{ '' if loop.last else ' · ' }}{% endfor %}.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

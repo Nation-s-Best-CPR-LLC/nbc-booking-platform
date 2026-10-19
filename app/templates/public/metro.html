@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}CPR & First Aid classes in {{ metro.name }}, {{ metro.state_code }}{% endblock %}
+{% block content %}
+<div class="stack-lg">
+  <div class="page-head">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="{{ url_for('public.home') }}">All cities</a><span>/</span><span>{{ metro.name }}</span></nav>
+    <span class="eyebrow">Step 2 of 4 · Course</span>
+    <h1>CPR & First Aid classes in {{ metro.name }}, {{ metro.state_code }}</h1>
+  </div>
+
+  <div class="grid">
+    {% for c in courses %}
+    <a class="panel choice" href="{{ url_for('public.course', metro_slug=metro.slug, course_slug=c.slug) }}">
+      <h2>{{ c.name }}</h2>
+      <span class="muted small num">{{ c.upcoming }} date{{ '' if c.upcoming == 1 else 's' }} · from {{ c.from_price_cents|money }}</span>
+      <span class="muted small">Next: {{ class_date(c.next_starts_at, metro.time_zone) }}</span>
+      <span class="go">Choose a date →</span>
+    </a>
+    {% else %}
+    <p class="notice">No classes are on sale in {{ metro.name }} right now.</p>
+    {% endfor %}
+  </div>
+
+  {% if sites %}
+  <div class="stack">
+    <h2>Where we teach in {{ metro.name }}</h2>
+    <div class="grid">
+      {% for s in sites %}
+      <div class="panel panel-body stack" style="gap:4px">
+        <h3>{{ s.name }}</h3>
+        <span class="muted small">{{ s.address_line1 }}{% if s.address_line2 %}, {{ s.address_line2 }}{% endif %}<br>{{ s.city }}, {{ s.state_code }} {{ s.postal_code }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
