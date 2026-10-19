@@ -404,5 +404,62 @@ SELECT pg_temp.expect_error(
      SELECT id, 'instructor' FROM user_accounts WHERE email = 'teach@example.test'$q$,
   '23505', 'the same role cannot be granted twice');
 
+-- ---------------------------------------------------------------------------
+-- Self-service accounts: password sign-in and automatic student role
+-- ---------------------------------------------------------------------------
+INSERT INTO user_accounts (email, display_name, status, signup_intent) VALUES
+  ('student2b@example.test', 'Future Student', 'active', 'student'),
+  ('wannabe@example.test',   'Says Instructor', 'active', 'instructor');
+INSERT INTO user_roles (user_account_id, role_code)
+SELECT id, 'user' FROM user_accounts WHERE email IN ('student2b@example.test', 'wannabe@example.test');
+
+SELECT pg_temp.expect_error(
+  $q$INSERT INTO user_identities (user_account_id, provider, subject)
+     SELECT id, 'password', email FROM user_accounts WHERE email = 'wannabe@example.test'$q$,
+  '23514', 'a password sign-in must have a password hash');
+SELECT pg_temp.expect_error(
+  $q$INSERT INTO user_identities (user_account_id, provider, subject, password_hash)
+     SELECT id, 'password', 'Wannabe@Example.test', 'scrypt:x' FROM user_accounts WHERE email = 'wannabe@example.test'$q$,
+  '23514', 'sign-in emails are stored lower-cased');
+
+SELECT pg_temp.check(
+  NOT user_has_permission((SELECT id FROM user_accounts WHERE email = 'wannabe@example.test'), 'own.classes_view'),
+  'signing up "as an instructor" grants no instructor access');
+
+-- Buying a seat makes the account a student (attendee email matches).
+INSERT INTO orders (channel, buyer_first_name, buyer_last_name, buyer_email, livemode)
+VALUES ('web', 'Future', 'Student', 'student2b@example.test', false);
+UPDATE metros SET booking_system = 'engine', cutover_at = now() WHERE slug = 'houston-tx';
+INSERT INTO seat_holds (session_id, order_id, kind, quantity, expires_at)
+SELECT (SELECT id FROM sessions WHERE slug = 'hou-1'), (SELECT max(id) FROM orders), 'checkout', 1, now() + interval '15 min';
+SELECT pg_temp.check(
+  NOT user_has_permission((SELECT id FROM user_accounts WHERE email = 'student2b@example.test'), 'self.bookings_view'),
+  'a regular user cannot see bookings before buying');
+INSERT INTO session_products (session_id, product_id, course_family_id, delivery_mode, price_cents)
+SELECT s.id, p.id, p.course_family_id, p.delivery_mode, p.base_price_cents
+FROM sessions s JOIN products p ON p.id = (SELECT ap FROM ids) WHERE s.slug = 'hou-1'
+ON CONFLICT DO NOTHING;
+INSERT INTO registrations (order_id, seat_hold_id, session_id, product_id, attendee_first_name, attendee_last_name,
+                           attendee_email, unit_price_cents, status, confirmed_at)
+SELECT (SELECT max(id) FROM orders), (SELECT max(id) FROM seat_holds),
+       (SELECT id FROM sessions WHERE slug = 'hou-1'), (SELECT ap FROM ids),
+       'Future', 'Student', 'student2b@example.test', 10800, 'confirmed', now();
+SELECT pg_temp.check(
+  user_has_permission((SELECT id FROM user_accounts WHERE email = 'student2b@example.test'), 'self.bookings_view'),
+  'paying for a seat makes the account a student automatically');
+
+-- ap1@example.test booked earlier in this script as a guest (no account then).
+INSERT INTO user_accounts (email, display_name, status) VALUES
+  ('ap1@example.test', 'Booked Before Signing Up', 'active'),
+  ('never-booked@example.test', 'Never Booked', 'active');
+CREATE TEMP TABLE grant_results AS
+SELECT grant_student_role_if_booked((SELECT id FROM user_accounts WHERE email = 'ap1@example.test'))          AS booked,
+       grant_student_role_if_booked((SELECT id FROM user_accounts WHERE email = 'never-booked@example.test')) AS not_booked;
+SELECT pg_temp.check(
+  (SELECT booked AND NOT not_booked FROM grant_results)
+  AND user_has_permission((SELECT id FROM user_accounts WHERE email = 'ap1@example.test'), 'self.bookings_view')
+  AND NOT user_has_permission((SELECT id FROM user_accounts WHERE email = 'never-booked@example.test'), 'self.bookings_view'),
+  'someone who booked as a guest becomes a student when they create an account; others do not');
+
 \echo 'All schema checks passed.'
 ROLLBACK;

@@ -9,17 +9,17 @@ repo holds the code and the technical docs.
 
 ```
 app/                 Flask app
-  __init__.py        create_app(): settings, database, blueprints
+  __init__.py        create_app(): settings, database, blueprints, error pages
   config.py          settings from environment variables
   db.py              one SQLAlchemy engine; plain SQL helpers; transaction()
-  auth.py            current user, roles, permission checks (user_has_permission in the DB)
+  auth.py            accounts: create, sign in (email + password), work out the role
+  security.py        form protection (CSRF token on every POST form)
   blueprints/
-    public.py        class finder: /, /<city>/, /<city>/<course>/, /<city>/<course>/<class>/
-    admin.py         staff side: /admin sign-in and one dashboard per role (/admin/d/<role>)
-    portal.py        instructor portal: /portal
+    public.py        landing page: classes on sale, greeting by role
+    account.py       /sign-in, /create-account, /sign-out
     webhooks.py      /webhooks/stripe, /webhooks/ghl (stubs until phases 3 and 4)
     health.py        /healthz
-  templates/, static/app.css
+  templates/, static/app.css   styled after nationsbestcpr.com
 db/
   schema.sql         the database (59 tables): see docs/database-architecture.md
   seed.sql           course families, settings, roles and permissions
@@ -31,6 +31,15 @@ scripts/
 tests/               app tests (pytest)
 wsgi.py              entry point for flask / gunicorn
 ```
+
+## How sign-in works
+
+One sign-in page for everyone; nobody picks a role. Every new account is a
+regular **user**. Paying for a seat makes them a **student** automatically
+(also if they booked as a guest before creating the account). Choosing
+"Instructor" at sign-up is recorded for the team to verify; the
+**instructor** and staff roles are only ever granted by an admin. Booking
+doesn't need an account.
 
 ## Run it locally
 
@@ -47,9 +56,10 @@ cp .env.example .env           # set DATABASE_URL=postgresql:///nbc
 flask --app wsgi run --debug   # http://localhost:5000
 ```
 
-Staff pages: open `/admin/sign-in` and pick a demo account (development
-sign-in, refused outside `APP_ENV=local`). Each account opens its role's
-dashboard; "Demo Ops Lead" has two roles and can switch.
+Demo accounts all use the password `demo-password` (local only), for example
+`riley.brooks@example.test` (user), `alder1@example.test` (student),
+`marcus.hale@example.test` (instructor) and `admin@example.test` (admin).
+Or create your own at `/create-account`.
 
 ## Tests
 
@@ -67,8 +77,9 @@ DATABASE_URL=postgresql:///postgres db/tests/last_seat_race.sh 40 12
 DATABASE_URL=postgresql:///nbc python scripts/export_preview.py   # writes build/preview/
 ```
 
-Renders every page with the demo data into static HTML (links rewritten,
-stylesheet inlined, server-only buttons switched off). `build/preview/index.html`
+Renders the pages with the demo data into static HTML, including the landing
+page as each kind of account sees it (links rewritten, stylesheet inlined,
+forms switched off). `build/preview/index.html`
 lists them all. `build/` is not committed.
 
 ## Deploy (Replit Reserved VM)
@@ -84,8 +95,8 @@ into the database, then set `app_settings.environment` to match `APP_ENV`
 | Phase | Status |
 |---|---|
 | Database schema, roles and permissions | Done (PR #1) |
-| App skeleton, class finder pages, role dashboards, instructor portal shell | This branch |
+| App skeleton: sign-in, create account, landing page of classes | This branch |
 | 1. Airtable sync | Next |
-| 2. Search pages and SEO | Pages started; sitemap, breadcrumbs, redirects to do |
+| 2. Search pages and SEO | To do |
 | 3. Seat holds and Stripe Checkout | To do |
-| 4. GHL sync · 4a tracking · 4b CS console + Microsoft sign-in · 4c instructor portal | To do |
+| 4. GHL sync · 4a tracking · 4b staff dashboards + Microsoft sign-in · 4c instructor portal | To do |

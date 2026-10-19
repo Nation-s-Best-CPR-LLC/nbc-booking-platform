@@ -27,7 +27,17 @@ and `docs/database-architecture.md` before changing data or integrations.
   `current_user().can(permission, metro_id)`. Roles and permissions are data
   (`db/seed.sql`), not hard-coded role names.
 - Secrets come from environment variables only. Never commit keys; `.env` is ignored.
-- `DEV_SIGN_IN` and `db/demo.sql` are for local development only.
+- Roles are never chosen at sign-in. New accounts get `user`; `student` is
+  granted by the database when a seat is paid for; instructor and staff
+  roles only by an admin. `signup_intent` grants nothing.
+- Passwords: werkzeug scrypt hashes only, one generic error for any failed
+  sign-in, lockout after repeated failures. Every POST form includes
+  `{{ csrf_input() }}`.
+- `db/demo.sql` (password `demo-password`) is for local development only.
+
+## Look
+- Styled after nationsbestcpr.com: navy and red, red pill navigation, pill
+  buttons with the arrow circle, "| label |" eyebrows, two-tone headings.
 
 ## Copy
 - Customer- and staff-facing text is plain English: "helper instructor", not

@@ -54,5 +54,6 @@ def cert_label(cert_type: str) -> str:
 def init_app(app: Flask) -> None:
     app.add_template_filter(cert_label)
     app.add_template_filter(money)
+    app.add_template_global(local_dt)
     app.add_template_global(class_date)
     app.add_template_global(class_time)

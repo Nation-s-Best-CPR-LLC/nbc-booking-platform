@@ -38,15 +38,29 @@ Views: `user_effective_permissions` (what each account may do), `session_availab
 
 ## Accounts, roles and dashboards
 
-Everyone who signs in has one `user_accounts` row: office staff and
-instructors alike. Customers never sign in. What a person may do comes only
-from the roles granted to them in `user_roles`, and each role opens its own
-dashboard (`roles.dashboard_key`). A person with several roles switches
-between dashboards; `auth_sessions.active_role_code` remembers which one is
-open.
+Everyone who signs in has one `user_accounts` row: customers, instructors
+and office staff alike. There is one sign-in page and nobody picks a role:
+what a person may do comes only from the roles granted to them in
+`user_roles`. The role with the lowest `roles.sort_order` is their main one
+and decides what they see first. Each role will open its own dashboard
+(`roles.dashboard_key`); someone with several roles switches between them.
 
-- **Sign-in** is per account in `user_identities`: Microsoft 365 for staff,
-  an emailed one-time link for instructors. One person can have both.
+- **How people get roles.**
+  - **Every new account** starts as a regular **user**.
+  - **Paying for a seat** makes them a **student**. A trigger on
+    `registrations` grants it when a booking under their email is confirmed.
+    Someone who booked as a guest becomes a student when they create an
+    account, via `grant_student_role_if_booked()`.
+  - **Instructor and staff roles** are granted by an admin only.
+  - **"I'm an instructor" at sign-up** is saved as
+    `user_accounts.signup_intent` for the team to verify. It grants nothing
+    on its own.
+- **Booking doesn't need an account.** Guests can still check out.
+- **Sign-in methods** are per account in `user_identities`:
+  - **Email and password** for everyone. Only a salted scrypt hash is stored.
+    The sign-in locks for 15 minutes after 5 wrong passwords.
+  - **Microsoft 365 for staff and emailed one-time links** come later.
+  - One person can have several sign-in methods.
 - **City-area limits.** A role grant can be limited to one city area
   (`user_roles.scope_metro_id`), e.g. a manager for Houston only. A limited
   grant never satisfies a check for another area or for all areas.
@@ -73,9 +87,11 @@ open.
 | Helper instructor recruiting | Helper search team | Microsoft | Gets helper-demand alerts; sees classes, waiting lists, instructors, coverage |
 | Second-class approver | Location approvals | Microsoft | Gets second-class alerts; sees classes and waiting lists |
 | Viewer | Read-only overview | Microsoft | Sees classes, waiting lists, coverage, reports and system health |
-| Instructor | Teachers (lead or helper) | Emailed link | Own classes only: request and release classes, class list and private details, check-in and marks, export class list, availability, certifications, pay |
+| Instructor | Teachers (lead or helper) | Email + password | Own classes only: request and release classes, class list and private details, check-in and marks, export class list, availability, certifications, pay |
+| Student | Customers who have booked (automatic) | Email + password | Their bookings, receipts and certificates; book more; manage their profile |
+| User | Every account (automatic) | Email + password | Book classes; manage their profile |
 
-The full permission list (46) and the role grants are in `db/seed.sql`, so
+The full permission list (49) and the role grants are in `db/seed.sql`, so
 changing who can do what is a data change, not a code change.
 
 ## Core relationships

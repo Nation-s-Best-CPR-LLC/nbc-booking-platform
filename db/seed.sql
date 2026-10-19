@@ -40,15 +40,18 @@ INSERT INTO app_settings (key, value, description) VALUES
 -- -----------------------------------------------------------------------------
 -- Roles (one dashboard each) and permissions
 -- -----------------------------------------------------------------------------
-INSERT INTO roles (code, name, description, dashboard_key, sign_in_method, grants_all, is_scopable, sort_order) VALUES
-  ('admin',             'Admin',                     'Everything, including people, roles, settings and billing items.',                 'admin',             'microsoft',  true,  false, 10),
-  ('manager',           'Manager',                   'Customer service plus large refunds, extra seats over the limit and the audit log.', 'manager',           'microsoft',  false, true,  20),
-  ('customer_service',  'Customer service',          'Find classes and students; book by phone or invoice; transfer, cancel, refund within policy.', 'customer_service', 'microsoft', false, true, 30),
-  ('operations',        'Operations',                'Teaching side: post classes to instructors, approve who teaches, add helpers, coverage.',     'operations',       'microsoft', false, true, 40),
-  ('helper_recruiting', 'Helper instructor recruiting', 'Gets alerts when a waiting list justifies a helper instructor; sees demand and coverage.', 'helper_recruiting', 'microsoft', false, true, 50),
-  ('location_approver', 'Second-class approver',     'Gets alerts when a small room has enough people waiting for a second class.',      'location_approver', 'microsoft',  false, true,  60),
-  ('viewer',            'Viewer',                    'Read-only overview: classes, waiting lists, coverage and reports.',                'viewer',            'microsoft',  false, true,  70),
-  ('instructor',        'Instructor',                'Own classes only: requests, schedule, class lists, attendance, availability, pay. Same role whether lead or helper in a class.', 'instructor', 'email_link', false, false, 80);
+-- sort_order decides which role the app treats as someone's main one after sign-in.
+INSERT INTO roles (code, name, description, dashboard_key, sign_in_method, is_staff, is_self_service, grants_all, is_scopable, sort_order) VALUES
+  ('admin',             'Admin',                     'Everything, including people, roles, settings and billing items.',                 'admin',             'microsoft', true,  false, true,  false, 10),
+  ('manager',           'Manager',                   'Customer service plus large refunds, extra seats over the limit and the audit log.', 'manager',           'microsoft', true,  false, false, true,  20),
+  ('customer_service',  'Customer service',          'Find classes and students; book by phone or invoice; transfer, cancel, refund within policy.', 'customer_service', 'microsoft', true, false, false, true, 30),
+  ('operations',        'Operations',                'Teaching side: post classes to instructors, approve who teaches, add helpers, coverage.',     'operations',       'microsoft', true, false, false, true, 40),
+  ('helper_recruiting', 'Helper instructor recruiting', 'Gets alerts when a waiting list justifies a helper instructor; sees demand and coverage.', 'helper_recruiting', 'microsoft', true, false, false, true, 50),
+  ('location_approver', 'Second-class approver',     'Gets alerts when a small room has enough people waiting for a second class.',      'location_approver', 'microsoft', true,  false, false, true,  60),
+  ('viewer',            'Viewer',                    'Read-only overview: classes, waiting lists, coverage and reports.',                'viewer',            'microsoft', true,  false, false, true,  70),
+  ('instructor',        'Instructor',                'Own classes only: requests, schedule, class lists, attendance, availability, pay. Same role whether lead or helper in a class.', 'instructor', 'password', false, false, false, false, 80),
+  ('student',           'Student',                   'Has booked a class: sees their bookings and certificates. Granted automatically when a seat is paid for.', 'student', 'password', false, true, false, false, 90),
+  ('user',              'User',                      'Anyone with an account: browse and book classes, manage their profile. Every new account starts here.',     'user',    'password', false, true, false, false, 100);
 
 INSERT INTO permissions (code, area, description, own_records_only) VALUES
   -- Classes
@@ -96,6 +99,10 @@ INSERT INTO permissions (code, area, description, own_records_only) VALUES
   ('own.availability_manage',  'My teaching', 'Set my availability and time off', true),
   ('own.certs_view',           'My teaching', 'See my certifications and expiry dates', true),
   ('own.pay_view',             'My teaching', 'See my pay records', true),
+  -- Customer self-service
+  ('self.profile_manage',      'My account',  'Update my name, email, phone and password', true),
+  ('self.book',                'My account',  'Book classes for myself or a group', true),
+  ('self.bookings_view',       'My account',  'See my bookings, receipts and certificates', true),
   -- Administration
   ('user.manage',              'Admin',       'Invite people; grant and revoke roles', false),
   ('settings.manage',          'Admin',       'Change business settings (hold minutes, alert days, ...)', false),
@@ -141,6 +148,12 @@ SELECT 'location_approver', unnest(ARRAY['class.view', 'waitlist.view', 'alert.s
 -- viewer
 INSERT INTO role_permissions (role_code, permission_code)
 SELECT 'viewer', unnest(ARRAY['class.view', 'waitlist.view', 'teaching.coverage_view', 'report.view', 'system.health_view']);
+
+-- user (every account) and student (has booked)
+INSERT INTO role_permissions (role_code, permission_code)
+SELECT 'user', unnest(ARRAY['self.profile_manage', 'self.book']);
+INSERT INTO role_permissions (role_code, permission_code)
+SELECT 'student', unnest(ARRAY['self.profile_manage', 'self.book', 'self.bookings_view']);
 
 -- instructor (lead or helper: same permissions; limited to their own classes)
 INSERT INTO role_permissions (role_code, permission_code)

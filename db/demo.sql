@@ -2,6 +2,7 @@
 -- Demo data for local development and the static preview. NEVER load this
 -- into staging or production.
 --   psql "$DATABASE_URL" -f db/schema.sql -f db/seed.sql -f db/demo.sql
+-- Every demo account signs in with the password: demo-password
 -- Richmond classes for the January 2027 pilot. People, emails and bookings are
 -- invented (example.test addresses). Henrico's address is from the launch hub;
 -- the other two sites' addresses come from Airtable later, so they say so.
@@ -125,8 +126,7 @@ INSERT INTO user_accounts (email, display_name, status) VALUES
   ('dana.whitfield@example.test', 'Dana Whitfield', 'active'),
   ('marcus.hale@example.test',    'Marcus Hale',    'active'),
   ('priya.raman@example.test',    'Priya Raman',    'active');
-INSERT INTO user_identities (user_account_id, provider, subject)
-SELECT id, 'email_link', email FROM user_accounts WHERE email LIKE '%.%@example.test';
+
 INSERT INTO user_roles (user_account_id, role_code)
 SELECT id, 'instructor' FROM user_accounts WHERE email LIKE '%.%@example.test';
 
@@ -186,6 +186,20 @@ SELECT a.id, v.role FROM user_accounts a, (VALUES
   ('approver@example.test', 'location_approver'), ('viewer@example.test', 'viewer'),
   ('opslead@example.test', 'manager'), ('opslead@example.test', 'operations')
 ) AS v(email, role) WHERE a.email = v.email;
+
+-- Customers: a regular user, one who signed up as an instructor (still a
+-- regular user until verified), and a student who booked as a guest first.
+INSERT INTO user_accounts (email, display_name, status, signup_intent) VALUES
+  ('riley.brooks@example.test', 'Riley Brooks', 'active', 'student'),
+  ('jamie.ortiz@example.test',  'Jamie Ortiz',  'active', 'instructor'),
+  ('alder1@example.test',       'Alex Alder',   'active', 'student');
+INSERT INTO user_roles (user_account_id, role_code)
+SELECT id, 'user' FROM user_accounts WHERE email IN ('riley.brooks@example.test', 'jamie.ortiz@example.test', 'alder1@example.test');
+SELECT grant_student_role_if_booked(id) FROM user_accounts WHERE email = 'alder1@example.test' \gset
+
+-- Everyone signs in with email + "demo-password" (local only).
+INSERT INTO user_identities (user_account_id, provider, subject, password_hash, password_changed_at)
+SELECT id, 'password', lower(email), 'scrypt:32768:8:1$lDs2WhELxSIHv6oh$ec7f1878edbf45db277b5c2d83944773604e041c02af38289a0663e2e796be1f2f9158291bcc528dfd3791e54fa8bdf8f1ad0678580a908c5ec7bdab55f45920', now() FROM user_accounts;
 
 -- A schedule copy that ran, and one data problem for Bre to fix ----------------
 INSERT INTO integration_runs (kind, trigger, status, stats, started_at, finished_at)

@@ -1,35 +1,99 @@
 {% extends "base.html" %}
-{% block title %}Find a CPR or First Aid class{% endblock %}
+{% block title %}CPR, First Aid & BLS classes{% endblock %}
 {% block content %}
-<div class="stack-lg">
-  <div class="page-head">
-    <span class="eyebrow">Step 1 of 4 · City</span>
-    <h1>Find a CPR, First Aid or BLS class</h1>
-    <p class="muted">American Red Cross certification classes. Pick your city, then the course, date and location.</p>
-  </div>
+<div class="wrap">
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="hero-inner">
+      <div>
+        <h1 id="hero-title">Life-Saving Skills,<br>Taught Near You</h1>
+        <p>American Red Cross CPR, First Aid, AED and BLS classes. Pick a date, book your seat, and get certified the same day.</p>
+        <div class="actions">
+          <a class="pill light" href="#classes">See available classes <span class="arrow" aria-hidden="true">→</span></a>
+          {% if not current_user %}<a class="pill red" href="{{ url_for('account.create_account') }}">Create account <span class="arrow" aria-hidden="true">→</span></a>{% endif %}
+        </div>
+      </div>
+      <div class="hero-side">
+        <div class="chips"><span class="chip">CPR Training</span><span class="chip">First Aid</span><span class="chip">AED Courses</span><span class="chip">BLS</span><span class="chip">Red Cross Certified</span></div>
+        <div class="stat-card"><strong>100K+</strong><span>Certified students<br>nationwide</span></div>
+      </div>
+    </div>
+  </section>
 
-  {% if metros %}
-  <div class="grid">
-    {% for m in metros %}
-    <a class="panel choice" href="{{ url_for('public.metro', metro_slug=m.slug) }}">
-      <h2>{{ m.name }}, {{ m.state_code }}</h2>
-      <span class="muted small num">
-        {% if m.upcoming %}{{ m.upcoming }} upcoming class{{ '' if m.upcoming == 1 else 'es' }} · next {{ class_date(m.next_starts_at, m.time_zone) }}{% else %}No classes scheduled yet{% endif %}
-      </span>
-      <span class="go">See classes →</span>
-    </a>
-    {% endfor %}
-  </div>
-  {% else %}
-  <p class="notice">No cities are booking here yet.</p>
+  {% if current_user %}
+  <section class="greeting" aria-label="Your account">
+    <div>
+      {% set role = current_user.main_role.code %}
+      <h2>{% if welcome %}Welcome, {{ current_user.first_name }}!{% else %}Hi, {{ current_user.first_name }}{% endif %}
+        <span class="role-badge {{ 'red' if current_user.is_staff else '' }}">{{ current_user.main_role.name }}</span></h2>
+      <p class="muted small">
+        {% if current_user.is_staff %}
+          Staff dashboards arrive in a later build. For now you see the same classes customers see.
+        {% elif role == 'instructor' %}
+          Your teaching schedule arrives with the instructor portal. These are the classes on sale.
+        {% elif role == 'student' %}
+          Your upcoming classes are below. Book another anytime.
+        {% elif current_user.signup_intent == 'instructor' %}
+          Thanks for signing up as an instructor. Our team will confirm your certification before your instructor account opens. Meanwhile, you can book any class.
+        {% else %}
+          Pick a class below to book your first seat.
+        {% endif %}
+      </p>
+    </div>
+    {% if my_classes %}
+    <div class="my-classes">
+      <strong>Your next class{{ 'es' if my_classes|length > 1 }}</strong>
+      {% for c in my_classes %}<span class="num">{{ class_date(c.starts_at, c.time_zone) }} · {{ c.course_name }} · {{ c.site_name }}</span>{% endfor %}
+    </div>
+    {% endif %}
+  </section>
   {% endif %}
 
-  {% if coming %}
-  <div class="stack">
-    <h2>Other cities</h2>
-    <p class="muted small">These cities still book through our current registration site and move here one at a time:
-      {% for c in coming %}{{ c.name }}, {{ c.state_code }}{{ '' if loop.last else ' · ' }}{% endfor %}.</p>
-  </div>
-  {% endif %}
+  <section class="section" id="classes" aria-labelledby="classes-title">
+    <div class="section-head">
+      <div class="stack">
+        <span class="eyebrow">Available classes</span>
+        <h2 class="title" id="classes-title">Find the CPR Class <span class="accent">That Fits You Best</span></h2>
+      </div>
+      {% if cities|length > 1 %}
+      <nav class="filters" aria-label="Filter by city">
+        <a class="filter" href="{{ url_for('public.home') }}#classes" aria-current="{{ 'true' if not city else 'false' }}">All cities</a>
+        {% for c in cities %}<a class="filter" href="{{ url_for('public.home', city=c.slug) }}#classes" aria-current="{{ 'true' if city == c.slug else 'false' }}">{{ c.name }}, {{ c.state_code }}</a>{% endfor %}
+      </nav>
+      {% elif cities %}
+      <p class="muted">Now booking in {{ cities[0].name }}, {{ cities[0].state_code }}. More cities soon.</p>
+      {% endif %}
+    </div>
+
+    {% if classes %}
+    <div class="class-grid">
+      {% for c in classes %}
+      {% set d = local_dt(c.starts_at, c.time_zone) %}
+      <article class="class-card">
+        <div class="date-tile" aria-hidden="true">
+          <div class="dow">{{ d.strftime('%a') }}</div><div class="day num">{{ d.day }}</div><div class="mon">{{ d.strftime('%b') }}</div>
+        </div>
+        <div class="class-body">
+          <h3>{{ c.course_name }}</h3>
+          <span class="meta num">{{ class_date(c.starts_at, c.time_zone) }} · {{ class_time(c.starts_at, c.ends_at, c.time_zone) }}</span>
+          <span class="meta">{{ c.site_name }}, {{ c.city_name }} · {{ c.delivery_mode|capitalize }}</span>
+          <div class="prices">{% for o in c.offers or [] %}<span>{{ o.name }} <strong class="num">{{ o.price|money }}</strong></span>{% endfor %}</div>
+          <div class="class-foot">
+            {% if c.seats_left <= 0 %}
+              <span class="seats full">Full · join the waitlist</span>
+              <button class="pill plain" type="button" aria-disabled="true" disabled>Join waitlist</button>
+            {% else %}
+              <span class="seats {{ 'low' if c.seats_left <= 3 }} num">{{ c.seats_left }} of {{ c.seat_limit }} seats left</span>
+              <button class="pill" type="button" aria-disabled="true" disabled title="Booking opens with checkout">Book now <span class="arrow" aria-hidden="true">→</span></button>
+            {% endif %}
+          </div>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+    <p class="muted small" style="margin-top:16px">Booking and payment open in the next build. Seats shown are live.</p>
+    {% else %}
+    <div class="empty">No classes are on sale right now. New dates are added every week.</div>
+    {% endif %}
+  </section>
 </div>
 {% endblock %}

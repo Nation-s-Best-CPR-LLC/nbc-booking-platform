@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from flask import Flask, render_template
 
-from . import auth, db, filters
+from . import auth, db, filters, security
 from .config import Config
 
 
@@ -16,27 +16,24 @@ def create_app(overrides: dict | None = None) -> Flask:
     Config.validate(app.config)
 
     db.init_app(app)
+    security.init_app(app)
     auth.init_app(app)
     filters.init_app(app)
 
-    # Fixed paths first; the public class finder's /<city>/... routes go last.
-    from .blueprints import admin, health, portal, public, webhooks
+    from .blueprints import account, health, public, webhooks
 
     app.register_blueprint(health.bp)
     app.register_blueprint(webhooks.bp)
-    app.register_blueprint(admin.bp)
-    app.register_blueprint(portal.bp)
+    app.register_blueprint(account.bp)
     app.register_blueprint(public.bp)
 
-    @app.errorhandler(403)
-    def forbidden(_e):
-        return render_template("errors/error.html", code=403,
-                               title="You don't have access to this page",
-                               message="Ask an admin to give your account the role this page needs."), 403
+    def error_page(code: int, title: str, message: str):
+        return render_template("errors/error.html", code=code, title=title, message=message), code
 
-    @app.errorhandler(404)
-    def not_found(_e):
-        return render_template("errors/error.html", code=404, title="Page not found",
-                               message="The class may have moved or finished. Start again from the class finder."), 404
-
+    app.register_error_handler(400, lambda e: error_page(400, "Something in that request wasn't right",
+                                                          getattr(e, "description", "") or "Go back and try again."))
+    app.register_error_handler(403, lambda e: error_page(403, "You don't have access to this page",
+                                                          "Ask an admin to give your account the role this page needs."))
+    app.register_error_handler(404, lambda e: error_page(404, "Page not found",
+                                                          "The class may have moved or finished. See the classes on sale."))
     return app

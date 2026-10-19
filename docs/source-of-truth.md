@@ -80,7 +80,9 @@ second, wrong source of truth.
 | Email, display name | **Mirror**: `user_accounts` | Shown in menus and the action log. |
 | Who may sign in at all | **Not stored** | Entra's "assignment required" decides. |
 | What a person may do (roles, permissions, dashboards) | **Owned**: `roles`, `permissions`, `role_permissions`, `user_roles` | The plan: "inside the console, mark who is a manager". Instructors (emailed sign-in links) use the same tables. |
-| Passwords, MFA | **Never** | |
+| Staff Microsoft passwords, MFA | **Never** | Entra handles them. |
+
+**Customer and instructor accounts** are the engine's own (`user_accounts`). Their email + password sign-in stores only a salted scrypt hash (`user_identities.password_hash`), never the password. An account links to its GHL-mirrored contact (`user_accounts.person_id`) once the person books.
 
 ### GA4, Meta (pixel + Conversions API), Google Ads — own analytics and ad data
 

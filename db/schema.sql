@@ -55,10 +55,17 @@ $$;
 -- =============================================================================
 -- 1. ACCOUNTS, ROLES AND PERMISSIONS
 -- =============================================================================
--- Everyone who signs in has one user account: office staff and instructors
--- alike. What they may do comes only from their roles; each role has its own
--- dashboard. Lead / helper (co-) instructor is NOT a role: it is the job an
--- instructor holds in one class (assignments.role). Customers never sign in.
+-- Everyone who signs in has one user account: customers, instructors and
+-- office staff alike. There is one sign-in page; the account's roles decide
+-- what the person sees, so nobody picks a role when signing in.
+--   * A new account starts as a regular user (role 'user').
+--   * Buying a seat makes them a student (role 'student', granted automatically
+--     when a registration under their email is confirmed).
+--   * Instructor and staff roles are only ever granted by an admin. Someone who
+--     signs up "as an instructor" stays a regular user until ops verifies them.
+-- Booking does not require an account: guests can still check out.
+-- Lead / helper (co-) instructor is NOT a role: it is the job an instructor
+-- holds in one class (assignments.role).
 
 CREATE TABLE user_accounts (
   id                bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -67,35 +74,48 @@ CREATE TABLE user_accounts (
   display_name      text NOT NULL,
   status            text NOT NULL DEFAULT 'invited'
                       CHECK (status IN ('invited', 'active', 'suspended', 'deactivated')),
+  -- What they told us at sign-up. Grants nothing by itself.
+  signup_intent     text CHECK (signup_intent IN ('student', 'instructor')),
+  person_id         bigint,                 -- their GHL-mirrored contact once they book (FK added after people)
+  email_verified_at timestamptz,
   last_sign_in_at   timestamptz,
   created_at        timestamptz NOT NULL DEFAULT now(),
   updated_at        timestamptz NOT NULL DEFAULT now()
 );
-COMMENT ON TABLE user_accounts IS '[OWNED] One row per person who can sign in (staff or instructor). Roles say what they may do.';
+COMMENT ON TABLE user_accounts IS '[OWNED] One row per person who can sign in: customer, instructor or staff. Roles say what they may do.';
 
--- How an account signs in. Staff: Microsoft 365 (Entra ID). Instructors: a
--- one-time link emailed to them. One account may have both.
+-- How an account signs in: email + password (everyone), Microsoft 365 (staff,
+-- later), or a one-time emailed link (later). One account may have several.
 CREATE TABLE user_identities (
   id                bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   user_account_id   bigint NOT NULL REFERENCES user_accounts (id) ON DELETE CASCADE,
-  provider          text NOT NULL CHECK (provider IN ('microsoft', 'email_link')),
-  subject           text NOT NULL,          -- Entra object id, or the sign-in email
+  provider          text NOT NULL CHECK (provider IN ('password', 'microsoft', 'email_link')),
+  subject           text NOT NULL,          -- lower-cased email, or the Entra object id
+  -- Salted scrypt hash (password provider only). The password itself is never stored.
+  password_hash     text,
+  password_changed_at timestamptz,
+  failed_attempts   integer NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0),
+  locked_until      timestamptz,
   tenant_id         uuid,                   -- Entra tenant (microsoft only)
   first_used_at     timestamptz,
   last_used_at      timestamptz,
   created_at        timestamptz NOT NULL DEFAULT now(),
   UNIQUE (provider, subject),
   UNIQUE (user_account_id, provider),
-  CHECK (provider <> 'microsoft' OR tenant_id IS NOT NULL)
+  CHECK (provider <> 'microsoft' OR tenant_id IS NOT NULL),
+  CHECK ((provider = 'password') = (password_hash IS NOT NULL)),
+  CHECK (provider = 'microsoft' OR subject = lower(subject))
 );
-COMMENT ON TABLE user_identities IS '[REF: Entra ID / OWNED] Sign-in methods bound to an account. Passwords are never stored.';
+COMMENT ON TABLE user_identities IS '[OWNED / REF: Entra ID] Sign-in methods bound to an account. Passwords only as salted hashes.';
 
 CREATE TABLE roles (
   code              text PRIMARY KEY CHECK (code ~ '^[a-z][a-z_]*$'),
   name              text NOT NULL,
   description       text NOT NULL,
   dashboard_key     text NOT NULL,          -- which dashboard this role opens
-  sign_in_method    text NOT NULL CHECK (sign_in_method IN ('microsoft', 'email_link')),
+  sign_in_method    text NOT NULL CHECK (sign_in_method IN ('password', 'microsoft', 'email_link')),
+  is_staff          boolean NOT NULL DEFAULT false,   -- office roles (granted by an admin only)
+  is_self_service   boolean NOT NULL DEFAULT false,   -- granted automatically (user, student)
   grants_all        boolean NOT NULL DEFAULT false,   -- admin: every permission, including future ones
   is_scopable       boolean NOT NULL DEFAULT false,   -- may be limited to one city area
   sort_order        integer NOT NULL DEFAULT 0
@@ -520,6 +540,10 @@ CREATE INDEX people_phone_idx ON people (phone_e164);
 CREATE INDEX people_phone_trgm ON people USING gin (phone_e164 gin_trgm_ops);
 CREATE INDEX people_name_trgm ON people USING gin ((first_name || ' ' || last_name) gin_trgm_ops);
 CREATE INDEX people_email_trgm ON people USING gin ((email::text) gin_trgm_ops);
+ALTER TABLE user_accounts
+  ADD CONSTRAINT user_accounts_person_fk FOREIGN KEY (person_id) REFERENCES people (id);
+CREATE INDEX user_accounts_person_idx ON user_accounts (person_id);
+
 COMMENT ON TABLE people IS '[MIRROR: GHL contact core fields + REF ghl_contact_id] One row per student/buyer, linked 1:1 to a GHL contact. GHL is the system of record for contact details; this copy exists so console search and rosters can join to registrations without calling GHL.';
 
 
@@ -1619,6 +1643,44 @@ END $$;
 CREATE TRIGGER sessions_cancel_releases_instructors AFTER UPDATE OF status ON sessions
   FOR EACH ROW WHEN (NEW.status = 'cancelled' AND OLD.status <> 'cancelled')
   EXECUTE FUNCTION trg_session_cancel_releases_instructors();
+
+
+-- Buying a seat makes an account holder a student. When a registration is
+-- confirmed, the account with the attendee's (or buyer's) email gets the
+-- 'student' role if it doesn't have it yet. Guests without an account are
+-- untouched; they become students the moment they create one (the sign-up
+-- code calls grant_student_role_if_booked).
+CREATE FUNCTION grant_student_role_if_booked(p_user_id bigint) RETURNS boolean
+LANGUAGE plpgsql AS $$
+DECLARE v_email citext;
+BEGIN
+  SELECT email INTO v_email FROM user_accounts WHERE id = p_user_id;
+  IF NOT EXISTS (SELECT 1 FROM registrations r JOIN orders o ON o.id = r.order_id
+                  WHERE r.status IN ('awaiting_payment', 'confirmed', 'completed', 'no_show')
+                    AND (r.attendee_email = v_email OR o.buyer_email = v_email)) THEN
+    RETURN false;
+  END IF;
+  INSERT INTO user_roles (user_account_id, role_code)
+  SELECT p_user_id, 'student'
+  WHERE NOT EXISTS (SELECT 1 FROM user_roles WHERE user_account_id = p_user_id
+                       AND role_code = 'student' AND revoked_at IS NULL);
+  RETURN true;
+END $$;
+
+CREATE FUNCTION trg_registration_grants_student() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO user_roles (user_account_id, role_code)
+  SELECT a.id, 'student'
+    FROM user_accounts a
+   WHERE a.email IN (NEW.attendee_email, (SELECT buyer_email FROM orders WHERE id = NEW.order_id))
+     AND NOT EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_account_id = a.id
+                        AND ur.role_code = 'student' AND ur.revoked_at IS NULL);
+  RETURN NULL;
+END $$;
+CREATE TRIGGER registrations_grant_student
+  AFTER INSERT OR UPDATE OF status ON registrations
+  FOR EACH ROW WHEN (NEW.status IN ('awaiting_payment', 'confirmed'))
+  EXECUTE FUNCTION trg_registration_grants_student();
 
 
 -- =============================================================================
