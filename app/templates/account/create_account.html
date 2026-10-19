@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Create an account{% endblock %}
+{% macro field_error(name) %}{% if errors[name] %}<span class="error" id="{{ name }}-error">{{ errors[name] }}</span>{% endif %}{% endmacro %}
+{% macro invalid(name) %}{% if errors[name] %}aria-invalid="true" aria-describedby="{{ name }}-error"{% endif %}{% endmacro %}
+{% block content %}
+<div class="wrap">
+  <div class="auth">
+    <div class="auth-side">
+      <span class="eyebrow" style="color:#ffb3b8">Join us</span>
+      <h1>Create Your Free Account</h1>
+      <p style="color:#d9d9ee">Book faster, keep your bookings in one place, and find your certificates later.</p>
+      <ul>
+        <li>Booking a class makes you a student automatically</li>
+        <li>Instructors: tell us below and our team confirms your certification</li>
+        <li>You can still book without an account</li>
+      </ul>
+    </div>
+    <form class="auth-form" method="post" action="{{ url_for('account.create_account') }}" novalidate>
+      {{ csrf_input() }}
+      <h2>Create an account</h2>
+      {% if errors %}<p class="alert" role="alert">Check the highlighted fields.</p>{% endif %}
+
+      <fieldset class="field">
+        <legend>I'm signing up as</legend>
+        <div class="choice-tiles">
+          <label class="tile" for="intent-student">
+            <input type="radio" id="intent-student" name="intent" value="student" {% if form.intent != 'instructor' %}checked{% endif %}>
+            <strong>Student</strong><span>I want to take a class</span>
+          </label>
+          <label class="tile" for="intent-instructor">
+            <input type="radio" id="intent-instructor" name="intent" value="instructor" {% if form.intent == 'instructor' %}checked{% endif %}>
+            <strong>Instructor</strong><span>I teach Red Cross classes</span>
+          </label>
+        </div>
+        {{ field_error('intent') }}
+      </fieldset>
+
+      <div class="row-2">
+        <div class="field">
+          <label for="first_name">First name</label>
+          <input type="text" id="first_name" name="first_name" value="{{ form.first_name }}" autocomplete="given-name" required {{ invalid('first_name') }}>
+          {{ field_error('first_name') }}
+        </div>
+        <div class="field">
+          <label for="last_name">Last name</label>
+          <input type="text" id="last_name" name="last_name" value="{{ form.last_name }}" autocomplete="family-name" required {{ invalid('last_name') }}>
+          {{ field_error('last_name') }}
+        </div>
+      </div>
+      <div class="field">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" value="{{ form.email }}" autocomplete="email" required {{ invalid('email') }}>
+        <span class="hint">Use the email you book with, so your bookings show up here.</span>
+        {{ field_error('email') }}
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" autocomplete="new-password" minlength="{{ config.PASSWORD_MIN_LENGTH }}" required {{ invalid('password') }}>
+        <span class="hint">At least {{ config.PASSWORD_MIN_LENGTH }} characters.</span>
+        {{ field_error('password') }}
+      </div>
+      <button class="pill red" type="submit" style="align-self:flex-start">Create account <span class="arrow" aria-hidden="true">→</span></button>
+      <p class="small">Already have an account? <a href="{{ url_for('account.sign_in') }}"><strong>Sign in</strong></a></p>
+    </form>
+  </div>
+</div>
+{% endblock %}

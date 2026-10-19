@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{% block title %}CPR, First Aid & BLS Classes{% endblock %} | Nation's Best CPR</title>
+  {% block head_meta %}{% endblock %}
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Urbanist:wght@400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  {% if config.PREVIEW_MODE %}
+  <div class="preview-banner"><div class="wrap">
+    <strong>Static preview</strong><span>Demo data. Forms need the running app.</span>
+    <a href="/__preview_index__">All preview pages</a>
+  </div></div>
+  {% endif %}
+
+  <header class="topbar"><div class="wrap">
+    <a class="logo" href="{{ url_for('public.home') }}" aria-label="Nation's Best CPR, home">
+      <span class="logo-mark" aria-hidden="true"></span>
+      <span class="logo-text">NATION'S BEST<small>CPR</small></span>
+    </a>
+    <nav class="navbar" aria-label="Main">
+      <a href="{{ url_for('public.home') }}#classes" {% if request.endpoint == 'public.home' %}aria-current="page"{% endif %}>Classes</a>
+      <a href="https://nationsbestcpr.com">About us</a>
+      <a href="https://nationsbestcpr.com">Workplace training</a>
+    </nav>
+    <div class="account">
+      {% if current_user %}
+        <span class="who"><strong>{{ current_user.display_name }}</strong><span class="small muted">{{ current_user.main_role.name }}</span></span>
+        <form method="post" action="{{ url_for('account.sign_out') }}">{{ csrf_input() }}<button class="link-btn" type="submit">Sign out</button></form>
+      {% else %}
+        <a class="link-btn" href="{{ url_for('account.sign_in') }}">Sign in</a>
+        <a class="pill" href="{{ url_for('account.create_account') }}">Create account <span class="arrow" aria-hidden="true">→</span></a>
+      {% endif %}
+    </div>
+  </div></header>
+
+  <main>{% block content %}{% endblock %}</main>
+
+  <footer class="site-footer"><div class="wrap">
+    <div>
+      <h3>Nation's Best CPR</h3>
+      <p class="small">Accredited CPR, AED and First Aid training through the American Red Cross, empowering people to act confidently.</p>
+    </div>
+    <div>
+      <h3>Classes</h3>
+      <ul><li><a href="{{ url_for('public.home') }}#classes">Find a class</a></li><li><a href="{{ url_for('account.create_account') }}">Create an account</a></li><li><a href="{{ url_for('account.sign_in') }}">Sign in</a></li></ul>
+    </div>
+    <div>
+      <h3>Contact</h3>
+      <ul><li>info@nationsbestcpr.com</li><li><a href="https://nationsbestcpr.com">nationsbestcpr.com</a></li></ul>
+    </div>
+    <p class="fine">© Nation's Best CPR. American Red Cross training provider.</p>
+  </div></footer>
+</body>
+</html>

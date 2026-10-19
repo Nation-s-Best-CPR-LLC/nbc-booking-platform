@@ -1,0 +1,59 @@
+"""Template helpers: money, local class times."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from flask import Flask
+
+_TZ_ABBR = {
+    "America/New_York": "ET",
+    "America/Chicago": "CT",
+    "America/Denver": "MT",
+    "America/Phoenix": "MST",
+    "America/Los_Angeles": "PT",
+}
+
+
+def money(cents: int | None) -> str:
+    if cents is None:
+        return ""
+    dollars, rem = divmod(int(cents), 100)
+    return f"${dollars:,}" if rem == 0 else f"${dollars:,}.{rem:02d}"
+
+
+def local_dt(value: datetime, tz: str) -> datetime:
+    return value.astimezone(ZoneInfo(tz))
+
+
+def class_date(value: datetime, tz: str) -> str:
+    return local_dt(value, tz).strftime("%a, %b %-d, %Y")
+
+
+def class_time(start: datetime, end: datetime, tz: str) -> str:
+    s, e = local_dt(start, tz), local_dt(end, tz)
+
+    def fmt(d: datetime) -> str:
+        return d.strftime("%-I:%M %p").replace(":00 ", " ").lower()
+
+    return f"{fmt(s)} – {fmt(e)} {_TZ_ABBR.get(tz, tz)}"
+
+
+_CERT_WORDS = {"ARC": "Red Cross", "BLS": "BLS", "FA": "First Aid", "CPR": "CPR", "AED": "AED",
+               "INSTRUCTOR": "instructor", "TRAINER": "trainer"}
+
+
+def cert_label(cert_type: str) -> str:
+    """'ARC_FA_CPR_AED_INSTRUCTOR' → 'Red Cross First Aid/CPR/AED instructor'."""
+    words = [_CERT_WORDS.get(w, w.lower()) for w in cert_type.split("_")]
+    out = " ".join(words).replace("First Aid CPR AED", "First Aid/CPR/AED")
+    return out[:1].upper() + out[1:]
+
+
+def init_app(app: Flask) -> None:
+    app.add_template_filter(cert_label)
+    app.add_template_filter(money)
+    app.add_template_global(local_dt)
+    app.add_template_global(class_date)
+    app.add_template_global(class_time)

@@ -1,0 +1,9 @@
+flask==3.1.0
+sqlalchemy==2.0.36
+psycopg[binary]==3.2.3
+gunicorn==23.0.0
+python-dotenv==1.0.1
+alembic==1.14.0
+
+# development and tests
+pytest==8.3.4
